@@ -126,6 +126,10 @@ namespace RePopCraftingStudio.UserControls
          if ( !recipes.Any() )
             return;
 
+         if (entityType == EntityTypes.Recipe)
+         {
+             entityId = 0;
+         }
          AddRecipeToNode( entityNode, recipes, recipes.First(), entityId );
       }
 
@@ -166,7 +170,7 @@ namespace RePopCraftingStudio.UserControls
          if ( !recipeResults.Any() )
          {
             MessageBox.Show( "DB failed to return results. Possible issue.", "Diagnostics", MessageBoxButtons.OK );
-            return;
+            //FIXME: return;
          }
 
          AddRecipeResultsToNode( recipeNode, recipeResults, recipeResults.First() );
@@ -394,12 +398,13 @@ namespace RePopCraftingStudio.UserControls
          public bool IsItem { get { return Entity is Item; } }
          public bool IsFitting { get { return Entity is Fitting; } }
          public bool IsBlueprint { get { return Entity is Blueprint; } }
+         public bool IsRecipe { get { return Entity is Recipe; } }
 
          public long Id { get { return Entity.Id; } }
          public string Name { get { return Entity.Name; } }
          public EntityTypes EntityType
          {
-            get { return IsItem ? EntityTypes.Item : IsFitting ? EntityTypes.Fitting : EntityTypes.Blueprint; }
+            get { return IsItem ? EntityTypes.Item : IsFitting ? EntityTypes.Fitting : IsRecipe ? EntityTypes.Recipe : EntityTypes.Blueprint; }
          }
       }
 

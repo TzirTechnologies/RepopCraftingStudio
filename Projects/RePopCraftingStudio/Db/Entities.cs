@@ -12,6 +12,7 @@ namespace RePopCraftingStudio.Db
       Item = 1,
       Fitting = 2,
       Blueprint = 3,
+      Recipe = 4,
    }
 
    public abstract class Entity
@@ -131,15 +132,24 @@ namespace RePopCraftingStudio.Db
       }
    }
 
-   public class Recipe : Entity
+   [DebuggerDisplay(@"{RecipeId}: {Name}")]
+   public class Recipe : NamedEntity
    {
+      public IList<RecipeResult> recipeResultList = new List<RecipeResult>();
+      public IList<RecipeAgent> recipeAgentList = new List<RecipeAgent>();
+      public IList<RecipeIngredient> recipeIngredientList = new List<RecipeIngredient>();
+      public IList<RecipeSkillRange> recipeSkillRangeList = new List<RecipeSkillRange>();
+
       public Recipe( RepopDb db, object[] items )
          : base( db, items )
       {
       }
 
-      public long RecipeId { get { return (long)Items[ 0 ]; } }
-      public string Name { get { return (string)Items[ 1 ]; } }
+      [EntityColumn(@"Recipe Id")]
+      public long RecipeId { get { return (long)Items[0]; } }
+      public override long Id { get { return RecipeId; } }
+      [EntityColumn(@"Name", 256)]
+      public override string Name { get { return (string)Items[1]; } }
       public string Description { get { return (string)Items[ 2 ]; } }
       public long SkillId { get { return (long)Items[ 3 ]; } }
       public string SkillName { get { return Db.GetSkillName( SkillId ); } }
@@ -243,5 +253,68 @@ namespace RePopCraftingStudio.Db
 
          return (long)Items[ 6 + index ];
       }
+   }
+
+   public class RecipeSkillRange : Entity
+   {
+       public RecipeSkillRange(RepopDb db, object[] items)
+           : base(db, items)
+       {
+       }
+
+       [EntityColumn(@"Recipe Id")]
+       public long RecipeId { get { return (long)Items[0]; } }
+
+       [EntityColumn(@"Level")]
+       public long Level { get { return (long)Items[1]; } }
+
+       [EntityColumn(@"Minf")]
+       public long MinF { get { return (long)Items[2]; } }
+
+       [EntityColumn(@"MinD")]
+       public long MinD { get { return (long)Items[3]; } }
+
+       [EntityColumn(@"MinC")]
+       public long MinC { get { return (long)Items[4]; } }
+
+       [EntityColumn(@"MinB")]
+       public long MinB { get { return (long)Items[5]; } }
+
+       [EntityColumn(@"MinA")]
+       public long MinA { get { return (long)Items[6]; } }
+
+       [EntityColumn(@"MinAA")]
+       public long MinAA { get { return (long)Items[7]; } }
+
+       [EntityColumn(@"Over1")]
+       public long Over1 { get { return (long)Items[8]; } }
+
+       [EntityColumn(@"Over2")]
+       public long Over2 { get { return (long)Items[9]; } }
+   }
+
+   [DebuggerDisplay(@"{SkillId}: {DisplayName}")]
+   public class Skill : Entity
+   {
+       public Skill(RepopDb db, object[] items)
+           : base(db, items)
+       {
+       }
+
+       public long SkillId { get { return (long)Items[0]; } }
+       public string DisplayName { get { return (string)Items[1]; } }
+       public string DisplayDescription { get { return (string)Items[2]; } }
+   }
+
+   [DebuggerDisplay(@"{ItemCraftingComponentId}: {ItemId}")]
+   public class ItemCraftingComponent : Entity
+   {
+       public ItemCraftingComponent(RepopDb db, object[] items)
+           : base(db, items)
+       {
+       }
+
+       public long ItemId { get { return (long)Items[0]; } }
+       public long ComponentId { get { return (long)Items[1]; } }
    }
 }

@@ -58,8 +58,11 @@ namespace RePopCraftingStudio.UserControls
                }
             }
 
-            item.BackColor = backColor;
-            item.Tag = entity;
+            if (item != null)
+            {
+                item.BackColor = backColor;
+                item.Tag = entity;
+            }
          }
       }
 

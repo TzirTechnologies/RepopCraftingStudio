@@ -27,6 +27,7 @@ namespace RePopCraftingStudio
       private void Form1_Load( object sender, EventArgs e )
       {
          _db = new RepopDb( this );
+
          theItemListSelection.Db = _db;
          theManifestCreater.Db = _db;
 
@@ -34,7 +35,6 @@ namespace RePopCraftingStudio
          //_recipeResultsListViewController = new RecipeResultsListViewController( _db, recipeResultsListView );
 
          LoadSettings();
-
 
          //_db.SchemaTest();
          //ItemManifest distWater = _db.BuildManifest( 290 );  // distilled water
@@ -142,6 +142,8 @@ namespace RePopCraftingStudio
          _db.ConnectionString = Properties.Settings.Default.ConnectionString;
          TestDbConnection();
 
+         _db.bootstrapDB();
+
          Location = Properties.Settings.Default.MainLocation;
          Size = Properties.Settings.Default.MainSize;
          mainSplitContainer.SplitterDistance = Properties.Settings.Default.MainSplitterDistance;
@@ -150,7 +152,7 @@ namespace RePopCraftingStudio
          //manifestViewSplitContainer.SplitterDistance = Properties.Settings.Default.ManifestViewSplitterDistance;
          theTabControl.SelectedIndex = Properties.Settings.Default.LastTabIndex;
 
-         theItemListSelection.LoadSettings();
+          theItemListSelection.LoadSettings();
          theManifestCreater.LoadSettings();
       }
 
@@ -176,7 +178,11 @@ namespace RePopCraftingStudio
          try
          {
             // test db connection
-            _db.GetItemName( 1 );
+            String name = _db.GetItemName( 1 );
+             if (name == String.Empty)
+             {
+                 throw new Exception("No connection");
+             }
          }
          catch ( Exception ex )
          {

@@ -27,6 +27,7 @@ namespace RePopCraftingStudio.UserControls
                      {0, Db.SelectItemEntitiesByName},
                      {1, Db.SelectFittingEntitiessByName},
                      {2, Db.SelectBlueprintEntitiesByName},
+                     {3, Db.SelectRecipeEntitiesByName},
                   };
             }
 
@@ -55,11 +56,13 @@ namespace RePopCraftingStudio.UserControls
                {0, itemsListView},
                {1, fittingsListView},
                {2, blueprintsListView},
+               {3, recipeListView},
             };
 
          itemsListView.EntityType = typeof( Item );
          fittingsListView.EntityType = typeof( Fitting );
          blueprintsListView.EntityType = typeof( Blueprint );
+         recipeListView.EntityType = typeof( Recipe );
       }
 
       public override void LoadSettings()
