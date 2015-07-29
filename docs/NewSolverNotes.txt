@@ -1,0 +1,33 @@
+
+
+For the new solver:
+
+Need a starting point:
+  Item
+  Recipe
+
+Need to be able to specify restrictions
+  I want certain abilities
+
+Need to be able to answer can I solve with this set of abilities?
+
+Maybe better to do full exploration and then query can I solve for this set of abilities, avoid these products, maximize skill gain with this inventory, etc.
+
+
+BlueprintRootNode
+  Targets (Item/Recipe)
+  BlueprintNodes
+
+BlueprintNode
+  Recipe/Subsistence
+
+  ChildNodes
+
+  SelectedSolution
+  Ingredients
+  Agents
+
+Have to be able to address all the agents specifically.
+i.e. 5 steps, 2 agents - 10 addresses to allow for mixed mode attributes.
+
+need to scan descriptions for type A metal, etc.

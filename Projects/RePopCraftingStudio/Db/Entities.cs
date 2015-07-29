@@ -62,8 +62,7 @@ namespace RePopCraftingStudio.Db
       }
 
       [EntityColumn( @"Item Id" )]
-      public long ItemId { get { return (long)Items[ 0 ]; } }
-      public override long Id { get { return ItemId; } }
+      public override long Id { get { return (long)Items[ 0 ]; } }
 
       [EntityColumn( @"Name", 256 )]
       public override string Name { get { return (string)Items[ 1 ]; } }

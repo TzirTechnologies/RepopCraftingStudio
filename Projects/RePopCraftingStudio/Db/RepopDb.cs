@@ -21,18 +21,16 @@ namespace RePopCraftingStudio.Db
         Dictionary<long, IList<ItemCraftingComponent>> itemCraftingComponentDict = new Dictionary<long, IList<ItemCraftingComponent>>();
         Dictionary<long, IList<ItemCraftingComponent>> itemCraftingComponentReverseDict = new Dictionary<long, IList<ItemCraftingComponent>>();
 
-        private Control _parent;
         public string ConnectionString { get; set; }
 
         // C-tors
-        public RepopDb(Control parent)
-            : this(parent, string.Empty)
+        public RepopDb()
+            : this(string.Empty)
         {
         }
 
-        public RepopDb(Control parent, string connectionString)
+        public RepopDb(string connectionString)
         {
-            _parent = parent;
             ConnectionString = connectionString;
         }
 
@@ -280,10 +278,6 @@ namespace RePopCraftingStudio.Db
 
             try
             {
-                try
-                {
-                    _parent.Cursor = Cursors.WaitCursor;
-
                     sql = string.Format(format, args);
                     Debug.WriteLine(sql);
                     if (string.IsNullOrEmpty(ConnectionString))
@@ -302,11 +296,6 @@ namespace RePopCraftingStudio.Db
                             return table;
                         }
                     }
-                }
-                finally
-                {
-                    _parent.Cursor = Cursors.Default;
-                }
             }
             catch (Exception ex)
             {
@@ -420,7 +409,7 @@ namespace RePopCraftingStudio.Db
                 if (recipeDict.TryGetValue(recipeSkillRange.RecipeId, out recipe) == true)
                 {
                     recipe.recipeSkillRangeList.Add(recipeSkillRange);
-                    Debug.WriteLine(GetSkillName(recipe.SkillId) + "," + recipe.Name + "," + recipeSkillRange.Level + "," + recipeSkillRange.MinF + "," + recipeSkillRange.MinD + "," + recipeSkillRange.MinC + "," + recipeSkillRange.MinB + "," + recipeSkillRange.MinA + "," + recipeSkillRange.MinAA + "," + recipeSkillRange.Over1 + "," + recipeSkillRange.Over2);
+                    //Debug.WriteLine(GetSkillName(recipe.SkillId) + "," + recipe.Name + "," + recipeSkillRange.Level + "," + recipeSkillRange.MinF + "," + recipeSkillRange.MinD + "," + recipeSkillRange.MinC + "," + recipeSkillRange.MinB + "," + recipeSkillRange.MinA + "," + recipeSkillRange.MinAA + "," + recipeSkillRange.Over1 + "," + recipeSkillRange.Over2);
                 }
             }
         }

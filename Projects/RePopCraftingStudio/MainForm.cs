@@ -26,7 +26,7 @@ namespace RePopCraftingStudio
 
       private void Form1_Load( object sender, EventArgs e )
       {
-         _db = new RepopDb( this );
+         _db = new RepopDb( );
 
          theItemListSelection.Db = _db;
          theManifestCreater.Db = _db;

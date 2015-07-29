@@ -219,7 +219,7 @@ namespace RePopCraftingStudio.UserControls
 
             if ( info.IsSpecific )
             {
-               AddRecipes( child, info.Items.First().ItemId, EntityTypes.Item );
+               AddRecipes( child, info.Items.First().Id, EntityTypes.Item );
             }
             else
             {
@@ -233,7 +233,7 @@ namespace RePopCraftingStudio.UserControls
                      info.SpecificItem = item;
                      child.Text = @"a. " + item.Name;
                      child.Nodes.Clear();
-                     AddRecipes( child, item.ItemId, EntityTypes.Item );
+                     AddRecipes( child, item.Id, EntityTypes.Item );
                      //child.ExpandAll();
                      BuildManifest();
                      ManifestTreeNodeThemes.Apply( child );
@@ -261,7 +261,7 @@ namespace RePopCraftingStudio.UserControls
 
             if ( info.IsSpecific )
             {
-               AddRecipes( child, info.Items.First().ItemId, EntityTypes.Item );
+               AddRecipes( child, info.Items.First().Id, EntityTypes.Item );
             }
             else
             {
@@ -275,7 +275,7 @@ namespace RePopCraftingStudio.UserControls
                         info.SpecificItem = item;
                         child.Text = @"a. " + item.Name;
                         child.Nodes.Clear();
-                        AddRecipes( child, item.ItemId, EntityTypes.Item );
+                        AddRecipes( child, item.Id, EntityTypes.Item );
                         //child.ExpandAll();
                         BuildManifest();
                         ManifestTreeNodeThemes.Apply( child );

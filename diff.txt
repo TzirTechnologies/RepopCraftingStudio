@@ -1,0 +1,2200 @@
+diff --git a/Projects/RePopCraftingStudio/Db/Entities.cs b/Projects/RePopCraftingStudio/Db/Entities.cs
+index 89ce94a..96eaa7d 100644
+--- a/Projects/RePopCraftingStudio/Db/Entities.cs
++++ b/Projects/RePopCraftingStudio/Db/Entities.cs
+@@ -11,7 +11,8 @@ namespace RePopCraftingStudio.Db
+    {
+       Item = 1,
+       Fitting = 2,
+-      Blueprint = 3,
++      Blueprint = 3,
++      Recipe = 4,
+    }
+ 
+    public abstract class Entity
+@@ -129,23 +130,27 @@ namespace RePopCraftingStudio.Db
+       {
+          return Name;
+       }
+-   }
+-
+-   public class Recipe : Entity
++   }
++
++   [DebuggerDisplay(@"{RecipeId}: {Name}")]
++   public class Recipe : NamedEntity
+    {
+       public Recipe( RepopDb db, object[] items )
+          : base( db, items )
+       {
+-      }
+-
+-      public long RecipeId { get { return (long)Items[ 0 ]; } }
+-      public string Name { get { return (string)Items[ 1 ]; } }
++      }
++
++      [EntityColumn(@"Recipe Id")]
++      public long RecipeId { get { return (long)Items[0]; } }
++      public override long Id { get { return RecipeId; } }
++      [EntityColumn(@"Name", 256)]
++      public override string Name { get { return (string)Items[1]; } }
+       public string Description { get { return (string)Items[ 2 ]; } }
+       public long SkillId { get { return (long)Items[ 3 ]; } }
+       public string SkillName { get { return Db.GetSkillName( SkillId ); } }
+       public long Steps { get { return (long)Items[ 4 ]; } }
+       public long IngredientWeight { get { return (long)Items[ 5 ]; } }
+-      public long AgentWeight { get { return (long)Items[ 6 ]; } }
++      public long AgentWeight { get { return (long)Items[ 6 ]; } }
+    }
+ 
+    public class RecipeAgent : Entity
+diff --git a/Projects/RePopCraftingStudio/Db/RepopDb.cs b/Projects/RePopCraftingStudio/Db/RepopDb.cs
+index d29bde4..cb1a46f 100644
+--- a/Projects/RePopCraftingStudio/Db/RepopDb.cs
++++ b/Projects/RePopCraftingStudio/Db/RepopDb.cs
+@@ -1,620 +1,315 @@
+-﻿using System;
+-using System.Collections.Generic;
+-using System.Data;
+-using System.Data.SQLite;
+-using System.Diagnostics;
+-using System.Linq;
+-using System.Windows.Forms;
+-using System.Xml.Linq;
+-
+-namespace RePopCraftingStudio.Db
+-{
+-   // Jim's request for credit:
+-   // I want to be referenced as "The dude that was once too stoned to make Mac & CHeese"
+-   // Misugumi, Towan Navarr, Treyonna Sullivan
+-
+-   public class RepopDb
+-   {
+-      private Control _parent;
+-      public string ConnectionString { get; set; }
+-
+-      // C-tors
+-      public RepopDb( Control parent )
+-         : this( parent, string.Empty )
+-      {
+-      }
+-
+-      public RepopDb( Control parent, string connectionString )
+-      {
+-         _parent = parent;
+-         ConnectionString = connectionString;
+-      }
+-
+-      // Agent Slot Info
+-      public IEnumerable<AgentSlotInfo> GetAgentSlotInfosForRecipeResult( RecipeResult recipeResult )
+-      {
+-         IList<AgentSlotInfo> slotInfos = new List<AgentSlotInfo>();
+-         var componentRows = GetDataRows( @"select componentId from recipe_agents where recipeId = {0}", recipeResult.RecipeId );
+-         foreach ( DataRow componentRow in componentRows )
+-         {
+-            long componentId = (long)componentRow[ @"componentId" ];
+-            IList<Item> items = new List<Item>();
+-            var itemRows = GetDataRows( @"select itemId from item_crafting_components where componentId = {0}", componentId );
+-            foreach ( DataRow row in itemRows )
+-            {
+-               items.Add( GetItemById( (long)row[ @"itemId" ] ) );
+-            }
+-
+-            AgentSlotInfo slot = new AgentSlotInfo
+-            {
+-               Component = SelectCraftingComponentById( componentId ),
+-               Items = items,
+-            };
+-            slotInfos.Add( slot );
+-         }
+-
+-         return slotInfos;
+-      }
+-
+-      // "crafting_components" table access
+-      public CraftingComponent SelectCraftingComponentById( long componentId )
+-      {
+-         return new CraftingComponent( this, GetDataRow( @"select * from crafting_components where componentId = {0}", componentId ).ItemArray );
+-      }
+-
+-      // "Fittings" table access
+-      public IEnumerable<Fitting> SelectFittingsByName( string filter )
+-      {
+-         return RowsToEntities(
+-            GetDataRows( @"select * from fittings where displayName like '%{0}%'", filter ),
+-            r => new Fitting( this, r.ItemArray ) );
+-      }
+-
+-      public IEnumerable<Entity> SelectFittingEntitiessByName( string filter )
+-      {
+-         return SelectFittingsByName( filter ).OfType<Entity>();
+-      }
+-
+-      // Ingredient Slot Info 
+-      public IEnumerable<IngredientSlotInfo> GetIngredientSlotsInfoForRecipeResult( RecipeResult recipeResult )
+-      {
+-         IList<IngredientSlotInfo> slotInfos = new List<IngredientSlotInfo>();
+-         for ( int ingSlot = 1; ingSlot < 5; ingSlot++ )
+-         {
+-            IngredientSlotInfo slotInfo = GetIngredientSlotInfoForRecipeResultAndIngSlot( recipeResult, ingSlot );
+-            if ( null != slotInfo )
+-               slotInfos.Add( slotInfo );
+-         }
+-
+-         return slotInfos;
+-      }
+-
+-      public IngredientSlotInfo GetIngredientSlotInfoForRecipeResultAndIngSlot( RecipeResult recipeResult, int ingSlot )
+-      {
+-         IList<Item> items = new List<Item>();
+-         var rows = GetDataRows( @"select * from item_crafting_filters
+-	         inner join item_crafting_components on (item_crafting_components.itemid = item_crafting_filters.itemid)
+-	         where item_crafting_components.componentid in
+-		         (select componentid from recipe_ingredients where recipeid={0} and ingslot={1})
+-	         and item_crafting_filters.filterid = {2}",
+-            recipeResult.RecipeId, ingSlot, recipeResult.GetFilterId( ingSlot ) );
+-         if ( 0 == rows.Count )
+-         {
+-            rows = GetDataRows( @"select * from item_crafting_components where componentid in
+-		            (select componentid from recipe_ingredients where recipeid={0} and ingslot={1})",
+-               recipeResult.RecipeId, ingSlot );
+-         }
+-         if ( 0 == rows.Count )
+-            return null;
+-
+-         foreach ( DataRow row in rows )
+-         {
+-            items.Add( GetItemById( (long)row[ @"itemId" ] ) );
+-         }
+-         return new IngredientSlotInfo
+-         {
+-            IngSlot = ingSlot,
+-            Items = items,
+-            Component = SelectCraftingComponentById( (long)rows[ 0 ][ @"componentId" ] ),
+-         };
+-      }
+-
+-      // "Items" table access
+-      public string GetItemName( long itemId )
+-      {
+-         if ( 0 == itemId )
+-            return string.Empty;
+-         return (string)GetDataRow( @"select displayName from items where itemId = {0}", itemId ).ItemArray[ 0 ];
+-      }
+-
+-      public Item GetItemById( long itemId )
+-      {
+-         if ( 0 == itemId )
+-            return null;
+-         return new Item( this, GetDataRow( @"select * from items where itemId = {0}", itemId ).ItemArray );
+-      }
+-
+-      public IEnumerable<Item> SelectItemsByName( string filter )
+-      {
+-         return RowsToEntities(
+-            GetDataRows( @"select * from items where displayName like '%{0}%'", filter ),
+-            r => new Item( this, r.ItemArray ) );
+-      }
+-
+-      public IEnumerable<Entity> SelectItemEntitiesByName( string filter )
+-      {
+-         return SelectItemsByName( filter ).OfType<Entity>();
+-      }
+-
+-      // "recipes" table access
+-      public IEnumerable<Recipe> SelectRecipesByResultIdandType( long id, EntityTypes type )
+-      {
+-         return RowsToEntities(
+-            GetDataRows( @"select * from recipes where recipeId in (select recipeId from recipe_results where resultId = {0} and type = {1} and groupId = 1)",
+-               id, (long)type ),
+-            r => new Recipe( this, r.ItemArray ) );
+-      }
+-
+-      // "recipe_results" table access
+-      public IEnumerable<RecipeResult> SelectRecipeResultsForRecipeAndResult( long recipeId, long resultId )
+-      {
+-         return RowsToEntities(
+-            GetDataRows(
+-               @"select * from recipe_results where resultId={0} and recipeId={1}", resultId, recipeId ),
+-               //@"select * from recipe_results where level=1 and resultId={0} and recipeId={1}", resultId, recipeId ),
+-            r => new RecipeResult( this, r.ItemArray ) );
+-      }
+-
+-      // "Skills" table access
+-      public string GetSkillName( long skillId )
+-      {
+-         if ( 0 == skillId )
+-            return string.Empty;
+-         return (string)GetDataRow( @"select displayName from skills where skillId = {0}", skillId ).ItemArray[ 0 ];
+-      }
+-
+-      // "Structures" table access
+-      public IEnumerable<Blueprint> SelectBlueprintsByName( string filter )
+-      {
+-         return RowsToEntities(
+-            GetDataRows( @"select * from structures where displayName like '%{0}%'", filter ),
+-            r => new Blueprint( this, r.ItemArray ) );
+-      }
+-
+-      public IEnumerable<Entity> SelectBlueprintEntitiesByName( string filter )
+-      {
+-         return SelectBlueprintsByName( filter ).OfType<Entity>();
+-      }
+-
+-
+-
+-
+-
+-
+-
+-      //select * from recipe_results where level=1 and resultId=442 and recipeId=481
+-
+-
+-      //public IEnumerable<RecipeResult> SelectRecipeResultsForItem( long recipeId, long groupId )
+-      //{
+-      //   return RowsToEntities(
+-      //      GetDataRows(
+-      //         @"select * from recipe_results where resultId = {0} and groupId = {1}", recipeId, groupId ),
+-      //      r => new RecipeResult( this, r.ItemArray ) );
+-      //}
+-
+-
+-
+-      //public string GetComponentName( EntityWithComponentId entity )
+-      //{
+-      //   return GetComponentName( entity.ComponentId );
+-      //}
+-
+-      //public string GetComponentName( long componentId )
+-      //{
+-      //   return (string)GetDataRow( @"select displayName from crafting_components where componentId = {0}", componentId ).ItemArray[ 0 ];
+-      //}
+-
+-
+-
+-
+-
+-      //public string GetRecipeName( RecipeResult recipeResult )
+-      //{
+-      //   return
+-      //      (string)
+-      //      GetDataRow( @"select displayName from recipes where recipeId = {0}", recipeResult.RecipeId ).ItemArray[ 0 ];
+-      //}
+-
+-      //public string GetCraftingFilterName( long filterId )
+-      //{
+-      //   if ( 0 == filterId )
+-      //      return string.Empty;
+-      //   return
+-      //      (string)GetDataRow( @"select displayName from crafting_filters where filterId = {0}", filterId ).ItemArray[ 0 ];
+-      //}
+-
+-      //public Item SelectItemById( long itemId )
+-      //{
+-      //   return new Item( this, GetDataRow( @"select * from items where itemId = {0}", itemId ).ItemArray );
+-      //}
+-
+-      //public IEnumerable<Item> SelectItemsByIds( IEnumerable<long> itemsIds )
+-      //{
+-      //   IList<Item> items = new List<Item>();
+-      //   foreach ( long id in itemsIds )
+-      //   {
+-      //      items.Add( SelectItemById( id ) );
+-      //   }
+-      //   return items;
+-      //}
+-
+-      //public IEnumerable<Recipe> SelectRecipesForItem( Item item )
+-      //{
+-      //   return SelectRecipesForItem( item.ItemId );
+-      //}
+-
+-      //public IEnumerable<Recipe> SelectRecipesForItem( long itemId )
+-      //{
+-      //   return RowsToEntities(
+-      //      GetDataRows(
+-      //         @"select * from recipes where recipeId in (select recipeId from recipe_results where resultId = {0})",
+-      //         itemId ),
+-      //      r => new Recipe( this, r.ItemArray ) );
+-      //}
+-
+-      //public IEnumerable<RecipeAgent> SelectRecipeAgentsForRecipe( Recipe recipe )
+-      //{
+-      //   return SelectRecipeAgentsForRecipe( recipe.RecipeId );
+-      //}
+-
+-      //public IEnumerable<RecipeAgent> SelectRecipeAgentsForRecipe( long recipeId )
+-      //{
+-      //   return RowsToEntities(
+-      //      GetDataRows(
+-      //         @"select * from recipe_agents where recipeId = {0}", recipeId ),
+-      //      r => new RecipeAgent( this, r.ItemArray ) );
+-      //}
+-
+-      //public IEnumerable<RecipeIngredient> SelectRecipeIngredientsForRecipe( Recipe recipe )
+-      //{
+-      //   return SelectRecipeIngredientsForRecipe( recipe.RecipeId );
+-      //}
+-
+-      //public IEnumerable<RecipeIngredient> SelectRecipeIngredientsForRecipe( long recipeId )
+-      //{
+-      //   return RowsToEntities(
+-      //      GetDataRows(
+-      //         @"select * from recipe_ingredients where recipeId = {0}", recipeId ),
+-      //      r => new RecipeIngredient( this, r.ItemArray ) );
+-      //}
+-
+-      //public IEnumerable<RecipeResult> SelectRecipeResultsForRecipe( Recipe recipe )
+-      //{
+-      //   return SelectRecipeResultsForRecipe( recipe.RecipeId );
+-      //}
+-
+-      //public IEnumerable<RecipeResult> SelectRecipeResultsForRecipe( long recipeId )
+-      //{
+-      //   return RowsToEntities(
+-      //      GetDataRows(
+-      //         @"select * from recipe_results where recipeId = {0}", recipeId ),
+-      //      r => new RecipeResult( this, r.ItemArray ) );
+-      //}
+-
+-      //public long[] SelectComponentIdsForRecipeIngredients( long recipeId )
+-      //{
+-      //   // TODO: Jim, can this be reduced?
+-      //   IList<long> componentIds = new List<long>();
+-
+-      //   for ( int slot = 1; slot <= 4; slot++ )
+-      //   {
+-      //      var rows = GetDataRows( @"select componentId from recipe_ingredients where recipeId={0} and ingSlot={1}",
+-      //                             recipeId, slot );
+-      //      if ( 0 == rows.Count )
+-      //         break;
+-
+-      //      componentIds.Add( (long)rows[ 0 ].ItemArray[ 0 ] );
+-      //   }
+-
+-      //   return componentIds.ToArray();
+-      //}
+-
+-      //public long SelectItemIdForCraftingComponentId( long componentId )
+-      //{
+-      //   return (long)GetDataRow( @"select itemId from item_crafting_components where componentId = {0}", componentId ).ItemArray[ 0 ];
+-      //}
+-
+-      //public IEnumerable<long> SelectItemIdsForCraftingComponentId( long componentId )
+-      //{
+-      //   IList<long> itemIds = new List<long>();
+-      //   var rows = GetDataRows( @"select itemId from item_crafting_components where componentId={0} ", componentId );
+-      //   foreach ( DataRow row in rows )
+-      //   {
+-      //      itemIds.Add( (long)row.ItemArray[ 0 ] );
+-      //   }
+-
+-      //   return itemIds;
+-      //}
+-
+-      //public IEnumerable<long> SelectItemIdsForCraftingComponentId( long componentId, long filterId )
+-      //{
+-      //   IList<long> itemIds = new List<long>();
+-      //   var rows = GetDataRows(
+-      //      "select * from item_crafting_filters " +
+-      //      "inner join item_crafting_components ON (item_crafting_components.itemId = item_crafting_filters.itemId) " +
+-      //      "where item_crafting_components.componentId = {0} and item_crafting_filters.filterId ={1}",
+-      //      componentId, filterId );
+-      //   foreach ( DataRow row in rows )
+-      //   {
+-      //      itemIds.Add( (long)row.ItemArray[ 0 ] );
+-      //   }
+-
+-      //   return itemIds;
+-      //}
+-
+-      //public IEnumerable<long> SelectComponentIdsForRecipeAgents( long recipeId )
+-      //{
+-      //   IList<long> componentIds = new List<long>();
+-      //   var rows = GetDataRows( @"select componentId from recipe_agents where recipeId={0} ", recipeId );
+-      //   foreach ( DataRow row in rows )
+-      //   {
+-      //      componentIds.Add( (long)row.ItemArray[ 0 ] );
+-      //   }
+-
+-      //   return componentIds;
+-      //}
+-
+-      // =============================================================================================
+-
+-      private IEnumerable<T> RowsToEntities<T>( DataRowCollection rows, Func<DataRow, T> make ) where T : Entity
+-      {
+-         IList<T> list = new List<T>();
+-
+-         foreach ( DataRow row in rows )
+-         {
+-            list.Add( make( row ) );
+-         }
+-         return list;
+-      }
+-
+-      public DataRow GetDataRow( string format, params object[] args )
+-      {
+-         return GetDataRows( string.Format( format, args ) )[ 0 ];
+-      }
+-
+-      public DataRowCollection GetDataRows( string format, params object[] args )
+-      {
+-         return GetDataTable( string.Format( format, args ) ).Rows;
+-      }
+-
+-      private DataTable GetDataTable( string format, params object[] args )
+-      {
+-         string sql = string.Empty;
+-
+-         try
+-         {
+-            try
+-            {
+-               _parent.Cursor = Cursors.WaitCursor;
+-
+-               sql = string.Format( format, args );
+-               Debug.WriteLine( sql );
+-               if ( string.IsNullOrEmpty( ConnectionString ) )
+-                  throw new InvalidOperationException( @"Connection string is null or empty." );
+-
+-               DataTable table = new DataTable();
+-
+-               using ( SQLiteConnection connection = new SQLiteConnection( ConnectionString ) )
+-               {
+-                  connection.Open();
+-                  using ( SQLiteCommand command = new SQLiteCommand( connection ) )
+-                  {
+-                     command.CommandText = sql;
+-                     SQLiteDataReader reader = command.ExecuteReader();
+-                     table.Load( reader );
+-                     return table;
+-                  }
+-               }
+-            }
+-            finally
+-            {
+-               _parent.Cursor = Cursors.Default;
+-            }
+-         }
+-         catch ( Exception ex )
+-         {
+-            throw new InvalidOperationException( string.Format( "Error executing SQL statement.\nSQL:\n\n{0}", sql ), ex );
+-         }
+-      }
+-
+-      // =============================================================================================
+-
+-      //public ItemManifest BuildManifest( long itemId )
+-      //{
+-      //   LogInfo( @"Building manifest for item id: {0}.", itemId );
+-
+-      //   IList<ManifestLineItem> ingredients = new List<ManifestLineItem>();
+-      //   IList<ManifestLineItem> agents = new List<ManifestLineItem>();
+-
+-      //   // Get recipe results where resultId = itemId && groupId = 1
+-      //   IEnumerable<RecipeResult> recipeResults = SelectRecipeResultsForItem( itemId, 1 );
+-      //   LogInfo( @"Selected {0} recipe results.", recipeResults.Count() );
+-      //   if ( !recipeResults.Any() )
+-      //      return null;
+-
+-      //   // NOTE: will need to address multipe results next, for now use first recipe result
+-      //   RecipeResult recipeResult = recipeResults.First();
+-      //   switch ( recipeResult.Type )
+-      //   {
+-      //      case EntityTypes.Item:           // pass thru...
+-      //         break;
+-      //      case EntityTypes.Fitting:        // pass thru
+-      //         break;
+-      //      case EntityTypes.Blueprint:
+-      //         return null;
+-      //   }
+-
+-      //   // Get each ingredient entry component Id
+-      //   long[] componentIds = SelectComponentIdsForRecipeIngredients( recipeResult.RecipeId );
+-      //   LogInfo( @"Selected {0} ingredient component ids for recipe id: {1}.", componentIds.Count(), recipeResult.RecipeId );
+-      //   for ( int ingSlot = 1; ingSlot <= 4; ingSlot++ )
+-      //   {
+-      //      if ( componentIds.Length == ingSlot - 1 )
+-      //         break;
+-
+-      //      long filterId = recipeResult.GetFilterId( ingSlot );
+-      //      long componentId = componentIds[ ingSlot - 1 ];
+-
+-      //      if ( 0 == filterId )
+-      //      {
+-      //         long ingItemId = SelectItemIdForCraftingComponentId( componentId );
+-      //         LogInfo( @"Selected item id: {0} for compontent Id: {1}", ingItemId, componentId );
+-      //         ingredients.Add( new ManifestLineItem( this, componentId, ingItemId ) );
+-      //      }
+-      //      else
+-      //      {
+-      //         IEnumerable<long> ingItemIds = SelectItemIdsForCraftingComponentId( componentId, filterId );
+-      //         LogInfo( @"Selected item ids: {0} for compontent Id: {1}", ingItemIds.ToArray(), componentId );
+-      //         ingredients.Add( new ManifestLineItem( this, componentId, ingItemIds.ToArray() ) );
+-      //      }
+-      //   }
+-
+-      //   // get each agent entry component Id
+-      //   // NOTE:  Brent, make attempt to write JOIN'd SQL for this in the morning.
+-      //   IEnumerable<long> compIds = SelectComponentIdsForRecipeAgents( recipeResult.RecipeId );
+-      //   LogInfo( @"Selected {0} agent component ids for recipe id: {1}.", compIds.Count(), recipeResult.RecipeId );
+-      //   foreach ( long compId in compIds )
+-      //   {
+-      //      agents.Add( new ManifestLineItem( this, compId, SelectItemIdsForCraftingComponentId( compId ) ) );
+-      //   }
+-
+-
+-      //   // Build up item manifest
+-
+-      //   IList<ItemManifest.Entry> ingredientEntries = new List<ItemManifest.Entry>();
+-      //   foreach ( ManifestLineItem item in ingredients )
+-      //   {
+-      //      ingredientEntries.Add( new ItemManifest.Entry(
+-      //         SelectCraftingComponentById( item.ComponentId ),
+-      //         SelectItemsByIds( item.ItemIds )
+-      //         ) );
+-      //   }
+-
+-      //   IList<ItemManifest.Entry> agentEntries = new List<ItemManifest.Entry>();
+-      //   foreach ( ManifestLineItem item in agents )
+-      //   {
+-      //      agentEntries.Add( new ItemManifest.Entry(
+-      //         SelectCraftingComponentById( item.ComponentId ),
+-      //         SelectItemsByIds( item.ItemIds )
+-      //         ) );
+-      //   }
+-
+-      //   ItemManifest itemManifest = new ItemManifest
+-      //   {
+-      //      Item = SelectItemById( itemId ),
+-      //      Ingredients = ingredientEntries,
+-      //      Agents = agentEntries,
+-      //   };
+-
+-      //   return itemManifest;
+-      //}
+-
+-      private void LogInfo( string format, params object[] args )
+-      {
+-         Debug.WriteLine( string.Format( format, args ) );
+-      }
+-
+-      //public void SchemaTest()
+-      //{
+-      //   List<string> rawTables = new List<string>();
+-      //   var rows = GetDataRows( @"SELECT tbl_name FROM sqlite_master" );
+-      //   foreach ( DataRow row in rows )
+-      //   {
+-      //      rawTables.Add( (string)row.ItemArray[ 0 ] );
+-      //   }
+-      //   IEnumerable<string> tables = rawTables.OrderBy( t => t ).Distinct();
+-
+-      //   XDocument doc = new XDocument( new XElement( @"Schema" ) );
+-      //   foreach ( string tableName in tables )
+-      //   {
+-      //      XElement ele = new XElement( tableName );
+-      //      DataTable table = GetDataTable( @"select * from {0}", tableName );
+-      //      foreach ( DataColumn column in table.Columns )
+-      //      {
+-      //         ele.Add( new XElement( column.ColumnName ) );
+-      //      }
+-      //      //string test = table.Columns[0].ColumnName;
+-
+-      //      doc.Root.Add( ele );
+-      //   }
+-
+-      //   string xml = doc.ToString();
+-      //}
+-
+-      //internal class ManifestLineItem
+-      //{
+-      //   protected RepopDb Db { get; private set; }
+-      //   private readonly IEnumerable<long> _itemIds;
+-      //   private IList<string> _itemNames;
+-
+-      //   public ManifestLineItem( RepopDb db, long componentId, long itemId )
+-      //      : this( db, componentId, new[] { itemId } )
+-      //   {
+-
+-      //   }
+-
+-      //   public ManifestLineItem( RepopDb db, long componentId, IEnumerable<long> itemIds )
+-      //   {
+-      //      Db = db;
+-      //      ComponentId = componentId;
+-      //      _itemIds = itemIds;
+-      //      GetItemNames();
+-      //   }
+-
+-      //   public bool IsSpecific { get { return 1 == _itemIds.Count(); } }
+-
+-      //   public long ComponentId { get; set; }
+-      //   public string ComponentName { get { return Db.GetComponentName( ComponentId ); } }
+-
+-      //   public long ItemId
+-      //   {
+-      //      get { return 1 == _itemIds.Count() ? _itemIds.First() : 0; }
+-      //   }
+-
+-      //   public IEnumerable<long> ItemIds { get { return _itemIds; } }
+-      //   public IEnumerable<string> ItemNames { get { return _itemNames; } }
+-
+-      //   private void GetItemNames()
+-      //   {
+-      //      _itemNames = new List<string>();
+-      //      foreach ( long itemId in ItemIds )
+-      //      {
+-      //         _itemNames.Add( Db.GetItemName( itemId ) );
+-      //      }
+-      //   }
+-      //}
+-   }
+-
+-   //public class ItemManifest
+-   //{
+-   //   [DebuggerDisplay( @"{Component}" )]
+-   //   public class Entry
+-   //   {
+-   //      public CraftingComponent Component { get; private set; }
+-   //      public IEnumerable<Item> Items { get; private set; }
+-   //      public bool IsSpecific { get { return 1 == Items.Count(); } }
+-   //      public Item SpecificItem { get { return Items.FirstOrDefault(); } }
+-
+-   //      public Entry( CraftingComponent component, IEnumerable<Item> items )
+-   //      {
+-   //         Component = component;
+-   //         Items = items;
+-   //      }
+-   //   }
+-
+-   //   public Item Item { get; set; }
+-   //   public IEnumerable<Entry> Ingredients { get; set; }
+-   //   public IEnumerable<Entry> Agents { get; set; }
+-   //}
++﻿using System;
++using System.Collections.Generic;
++using System.Data;
++using System.Data.SQLite;
++using System.Diagnostics;
++using System.Linq;
++using System.Windows.Forms;
++using System.Xml.Linq;
++
++namespace RePopCraftingStudio.Db
++{
++   // Jim's request for credit:
++   // I want to be referenced as "The dude that was once too stoned to make Mac & CHeese"
++   // Misugumi, Towan Navarr, Treyonna Sullivan
++
++    public class RepopDb
++    {
++        Dictionary<long, Recipe> recipeDict = new Dictionary<long, Recipe>();
++
++        private Control _parent;
++        public string ConnectionString { get; set; }
++
++        // C-tors
++        public RepopDb(Control parent)
++            : this(parent, string.Empty)
++        {
++        }
++
++        public RepopDb(Control parent, string connectionString)
++        {
++            _parent = parent;
++            ConnectionString = connectionString;
++        }
++
++        // Agent Slot Info
++        public IEnumerable<AgentSlotInfo> GetAgentSlotInfosForRecipeResult(RecipeResult recipeResult)
++        {
++            IList<AgentSlotInfo> slotInfos = new List<AgentSlotInfo>();
++            var componentRows = GetDataRows(@"select componentId from recipe_agents where recipeId = {0}", recipeResult.RecipeId);
++            foreach (DataRow componentRow in componentRows)
++            {
++                long componentId = (long)componentRow[@"componentId"];
++                IList<Item> items = new List<Item>();
++                var itemRows = GetDataRows(@"select itemId from item_crafting_components where componentId = {0}", componentId);
++                foreach (DataRow row in itemRows)
++                {
++                    items.Add(GetItemById((long)row[@"itemId"]));
++                }
++
++                AgentSlotInfo slot = new AgentSlotInfo
++                {
++                    Component = SelectCraftingComponentById(componentId),
++                    Items = items,
++                };
++                slotInfos.Add(slot);
++            }
++
++            return slotInfos;
++        }
++
++        // "crafting_components" table access
++        public CraftingComponent SelectCraftingComponentById(long componentId)
++        {
++            return new CraftingComponent(this, GetDataRow(@"select * from crafting_components where componentId = {0}", componentId).ItemArray);
++        }
++
++        // "Fittings" table access
++        public IEnumerable<Fitting> SelectFittingsByName(string filter)
++        {
++            return RowsToEntities(
++               GetDataRows(@"select * from fittings where displayName like '%{0}%'", filter),
++               r => new Fitting(this, r.ItemArray));
++        }
++
++        public IEnumerable<Entity> SelectFittingEntitiessByName(string filter)
++        {
++            return SelectFittingsByName(filter).OfType<Entity>();
++        }
++
++        // Ingredient Slot Info 
++        public IEnumerable<IngredientSlotInfo> GetIngredientSlotsInfoForRecipeResult(RecipeResult recipeResult)
++        {
++            IList<IngredientSlotInfo> slotInfos = new List<IngredientSlotInfo>();
++            for (int ingSlot = 1; ingSlot < 5; ingSlot++)
++            {
++                IngredientSlotInfo slotInfo = GetIngredientSlotInfoForRecipeResultAndIngSlot(recipeResult, ingSlot);
++                if (null != slotInfo)
++                    slotInfos.Add(slotInfo);
++            }
++
++            return slotInfos;
++        }
++
++        public IngredientSlotInfo GetIngredientSlotInfoForRecipeResultAndIngSlot(RecipeResult recipeResult, int ingSlot)
++        {
++            IList<Item> items = new List<Item>();
++            var rows = GetDataRows(@"select * from item_crafting_filters
++	         inner join item_crafting_components on (item_crafting_components.itemid = item_crafting_filters.itemid)
++	         where item_crafting_components.componentid in
++		         (select componentid from recipe_ingredients where recipeid={0} and ingslot={1})
++	         and item_crafting_filters.filterid = {2}",
++               recipeResult.RecipeId, ingSlot, recipeResult.GetFilterId(ingSlot));
++            if (0 == rows.Count)
++            {
++                rows = GetDataRows(@"select * from item_crafting_components where componentid in
++		            (select componentid from recipe_ingredients where recipeid={0} and ingslot={1})",
++                   recipeResult.RecipeId, ingSlot);
++            }
++            if (0 == rows.Count)
++                return null;
++
++            foreach (DataRow row in rows)
++            {
++                items.Add(GetItemById((long)row[@"itemId"]));
++            }
++            return new IngredientSlotInfo
++            {
++                IngSlot = ingSlot,
++                Items = items,
++                Component = SelectCraftingComponentById((long)rows[0][@"componentId"]),
++            };
++        }
++
++        // "Items" table access
++        public string GetItemName(long itemId)
++        {
++            if (0 == itemId)
++                return string.Empty;
++            try
++            {
++                return (string)GetDataRow(@"select displayName from items where itemId = {0}", itemId).ItemArray[0];
++            }
++            catch (Exception ex)
++            {
++                return string.Empty;
++            }
++        }
++
++        public Item GetItemById(long itemId)
++        {
++            if (0 == itemId)
++                return null;
++            return new Item(this, GetDataRow(@"select * from items where itemId = {0}", itemId).ItemArray);
++        }
++
++        public IEnumerable<Item> SelectItemsByName(string filter)
++        {
++            return RowsToEntities(
++               GetDataRows(@"select * from items where displayName like '%{0}%'", filter),
++               r => new Item(this, r.ItemArray));
++        }
++
++        public IEnumerable<Entity> SelectItemEntitiesByName(string filter)
++        {
++            return SelectItemsByName(filter).OfType<Entity>();
++        }
++
++        // "recipes" table access
++        public IEnumerable<Recipe> SelectRecipesByResultIdandType(long id, EntityTypes type)
++        {
++            if (type == EntityTypes.Recipe)
++            {
++                return RowsToEntities(
++                   GetDataRows(@"select * from recipes where recipeId = {0}",
++                      id),
++                   r => new Recipe(this, r.ItemArray));
++            }
++            else
++            {
++                return RowsToEntities(
++                   GetDataRows(@"select * from recipes where recipeId in (select recipeId from recipe_results where resultId = {0} and type = {1} and groupId = 1)",
++                      id, (long)type),
++                   r => new Recipe(this, r.ItemArray));
++            }
++        }
++
++        // "recipe_results" table access
++        public IEnumerable<RecipeResult> SelectRecipeResultsForRecipeAndResult(long recipeId, long resultId)
++        {
++            if (resultId != 0)
++            {
++                return RowsToEntities(
++                   GetDataRows(
++                      @"select * from recipe_results where resultId={0} and recipeId={1}", resultId, recipeId),
++                    //@"select * from recipe_results where level=1 and resultId={0} and recipeId={1}", resultId, recipeId ),
++                   r => new RecipeResult(this, r.ItemArray));
++            }
++            else
++            {
++                return RowsToEntities(
++                   GetDataRows(
++                      @"select * from recipe_results where recipeId={0}", recipeId),
++                    //@"select * from recipe_results where level=1 and resultId={0} and recipeId={1}", resultId, recipeId ),
++                   r => new RecipeResult(this, r.ItemArray));
++            }
++        }
++
++        // "Skills" table access
++        public string GetSkillName(long skillId)
++        {
++            if (0 == skillId)
++                return string.Empty;
++            return (string)GetDataRow(@"select displayName from skills where skillId = {0}", skillId).ItemArray[0];
++        }
++
++        // "Structures" table access
++        public IEnumerable<Blueprint> SelectBlueprintsByName(string filter)
++        {
++            return RowsToEntities(
++               GetDataRows(@"select * from structures where displayName like '%{0}%'", filter),
++               r => new Blueprint(this, r.ItemArray));
++        }
++
++        public IEnumerable<Entity> SelectBlueprintEntitiesByName(string filter)
++        {
++            return SelectBlueprintsByName(filter).OfType<Entity>();
++        }
++
++
++        // "Recipe" table access
++        public IEnumerable<Recipe> SelectRecipesByName(string filter)
++        {
++            return RowsToEntities(
++               GetDataRows(@"select * from recipes where displayName like '%{0}%'", filter),
++               r => new Recipe(this, r.ItemArray));
++        }
++
++        public IEnumerable<Entity> SelectRecipeEntitiesByName(string filter)
++        {
++            return SelectRecipesByName(filter).OfType<Entity>();
++        }
++
++        private IEnumerable<T> RowsToEntities<T>(DataRowCollection rows, Func<DataRow, T> make) where T : Entity
++        {
++            IList<T> list = new List<T>();
++
++            foreach (DataRow row in rows)
++            {
++                list.Add(make(row));
++            }
++            return list;
++        }
++
++        public DataRow GetDataRow(string format, params object[] args)
++        {
++            return GetDataRows(string.Format(format, args))[0];
++        }
++
++        public DataRowCollection GetDataRows(string format, params object[] args)
++        {
++            return GetDataTable(string.Format(format, args)).Rows;
++        }
++
++        private DataTable GetDataTable(string format, params object[] args)
++        {
++            string sql = string.Empty;
++
++            try
++            {
++                try
++                {
++                    _parent.Cursor = Cursors.WaitCursor;
++
++                    sql = string.Format(format, args);
++                    Debug.WriteLine(sql);
++                    if (string.IsNullOrEmpty(ConnectionString))
++                        throw new InvalidOperationException(@"Connection string is null or empty.");
++
++                    DataTable table = new DataTable();
++
++                    using (SQLiteConnection connection = new SQLiteConnection(ConnectionString))
++                    {
++                        connection.Open();
++                        using (SQLiteCommand command = new SQLiteCommand(connection))
++                        {
++                            command.CommandText = sql;
++                            SQLiteDataReader reader = command.ExecuteReader();
++                            table.Load(reader);
++                            return table;
++                        }
++                    }
++                }
++                finally
++                {
++                    _parent.Cursor = Cursors.Default;
++                }
++            }
++            catch (Exception ex)
++            {
++                throw new InvalidOperationException(string.Format("Error executing SQL statement.\nSQL:\n\n{0}", sql), ex);
++            }
++        }
++
++        private void LogInfo(string format, params object[] args)
++        {
++            Debug.WriteLine(string.Format(format, args));
++        }
++
++        public void bootstrapDB()
++        {
++            bootstrapRecipes();
++        }
++
++        private void bootstrapRecipes()
++        {
++            IEnumerable<Recipe> recipeList = RowsToEntities(
++                   GetDataRows(@"select * from recipes"),
++                   r => new Recipe(this, r.ItemArray));
++            foreach (Recipe recipe in recipeList)
++            {
++                recipeDict.Add(recipe.RecipeId, recipe);
++            }
++        }
++    }
+ }
+\ No newline at end of file
+diff --git a/Projects/RePopCraftingStudio/MainForm.cs b/Projects/RePopCraftingStudio/MainForm.cs
+index df56eb9..169f24a 100644
+--- a/Projects/RePopCraftingStudio/MainForm.cs
++++ b/Projects/RePopCraftingStudio/MainForm.cs
+@@ -26,16 +26,16 @@ namespace RePopCraftingStudio
+ 
+       private void Form1_Load( object sender, EventArgs e )
+       {
+-         _db = new RepopDb( this );
++         _db = new RepopDb( this );
++
+          theItemListSelection.Db = _db;
+          theManifestCreater.Db = _db;
+ 
+          //_recipeTreeViewController = new RecipeTreeViewController( _db, recipeTreeView );
+          //_recipeResultsListViewController = new RecipeResultsListViewController( _db, recipeResultsListView );
+ 
+-         LoadSettings();
+-
+-
++         LoadSettings();
++
+          //_db.SchemaTest();
+          //ItemManifest distWater = _db.BuildManifest( 290 );  // distilled water
+          //ItemManifest sulfAcid = _db.BuildManifest( 974 );  // sulfuric acid
+@@ -140,7 +140,7 @@ namespace RePopCraftingStudio
+       private void LoadSettings()
+       {
+          _db.ConnectionString = Properties.Settings.Default.ConnectionString;
+-         TestDbConnection();
++         TestDbConnection();
+ 
+          Location = Properties.Settings.Default.MainLocation;
+          Size = Properties.Settings.Default.MainSize;
+@@ -148,9 +148,9 @@ namespace RePopCraftingStudio
+          leftSplitContainer.SplitterDistance = Properties.Settings.Default.LeftSplitterDistance;
+          gameViewSplitContainer.SplitterDistance = Properties.Settings.Default.GameViewSplitterDistance;
+          //manifestViewSplitContainer.SplitterDistance = Properties.Settings.Default.ManifestViewSplitterDistance;
+-         theTabControl.SelectedIndex = Properties.Settings.Default.LastTabIndex;
+-
+-         theItemListSelection.LoadSettings();
++         theTabControl.SelectedIndex = Properties.Settings.Default.LastTabIndex;
++
++          theItemListSelection.LoadSettings();
+          theManifestCreater.LoadSettings();
+       }
+ 
+diff --git a/Projects/RePopCraftingStudio/RePopCraftingStudio.csproj b/Projects/RePopCraftingStudio/RePopCraftingStudio.csproj
+index 56fc265..d6406a4 100644
+--- a/Projects/RePopCraftingStudio/RePopCraftingStudio.csproj
++++ b/Projects/RePopCraftingStudio/RePopCraftingStudio.csproj
+@@ -1,192 +1,192 @@
+-﻿<?xml version="1.0" encoding="utf-8"?>
+-<Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+-  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+-  <PropertyGroup>
+-    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+-    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+-    <ProjectGuid>{FBF611E8-052B-4ABF-B606-D70841685BC8}</ProjectGuid>
+-    <OutputType>WinExe</OutputType>
+-    <AppDesignerFolder>Properties</AppDesignerFolder>
+-    <RootNamespace>RePopCraftingStudio</RootNamespace>
+-    <AssemblyName>RePopCraftingStudio</AssemblyName>
+-    <TargetFrameworkVersion>v3.5</TargetFrameworkVersion>
+-    <FileAlignment>512</FileAlignment>
+-    <TargetFrameworkProfile />
+-    <IsWebBootstrapper>false</IsWebBootstrapper>
+-    <PublishUrl>C:\dev\RepopCraftingStudio\Publish\</PublishUrl>
+-    <Install>true</Install>
+-    <InstallFrom>Disk</InstallFrom>
+-    <UpdateEnabled>false</UpdateEnabled>
+-    <UpdateMode>Foreground</UpdateMode>
+-    <UpdateInterval>7</UpdateInterval>
+-    <UpdateIntervalUnits>Days</UpdateIntervalUnits>
+-    <UpdatePeriodically>false</UpdatePeriodically>
+-    <UpdateRequired>false</UpdateRequired>
+-    <MapFileExtensions>true</MapFileExtensions>
+-    <ApplicationRevision>5</ApplicationRevision>
+-    <ApplicationVersion>1.0.0.%2a</ApplicationVersion>
+-    <UseApplicationTrust>false</UseApplicationTrust>
+-    <PublishWizardCompleted>true</PublishWizardCompleted>
+-    <BootstrapperEnabled>true</BootstrapperEnabled>
+-  </PropertyGroup>
+-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+-    <PlatformTarget>x86</PlatformTarget>
+-    <DebugSymbols>true</DebugSymbols>
+-    <DebugType>full</DebugType>
+-    <Optimize>false</Optimize>
+-    <OutputPath>bin\Debug\</OutputPath>
+-    <DefineConstants>DEBUG;TRACE</DefineConstants>
+-    <ErrorReport>prompt</ErrorReport>
+-    <WarningLevel>4</WarningLevel>
+-    <UseVSHostingProcess>false</UseVSHostingProcess>
+-    <RunCodeAnalysis>true</RunCodeAnalysis>
+-  </PropertyGroup>
+-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+-    <PlatformTarget>AnyCPU</PlatformTarget>
+-    <DebugType>pdbonly</DebugType>
+-    <Optimize>true</Optimize>
+-    <OutputPath>bin\Release\</OutputPath>
+-    <DefineConstants>TRACE</DefineConstants>
+-    <ErrorReport>prompt</ErrorReport>
+-    <WarningLevel>4</WarningLevel>
+-  </PropertyGroup>
+-  <PropertyGroup>
+-    <ManifestCertificateThumbprint>ED937BE7BB42F98EBF194F654C6EAC49EAFEEC4F</ManifestCertificateThumbprint>
+-  </PropertyGroup>
+-  <PropertyGroup>
+-    <ManifestKeyFile>RePopCraftingStudio_TemporaryKey.pfx</ManifestKeyFile>
+-  </PropertyGroup>
+-  <PropertyGroup>
+-    <GenerateManifests>true</GenerateManifests>
+-  </PropertyGroup>
+-  <PropertyGroup>
+-    <SignManifests>true</SignManifests>
+-  </PropertyGroup>
+-  <ItemGroup>
+-    <Reference Include="System" />
+-    <Reference Include="System.Configuration" />
+-    <Reference Include="System.Core" />
+-    <Reference Include="System.Data.SQLite">
+-      <HintPath>..\..\Libs\System.Data.SQLite.dll</HintPath>
+-    </Reference>
+-    <Reference Include="System.Data.SQLite.Linq">
+-      <HintPath>..\..\Libs\System.Data.SQLite.Linq.dll</HintPath>
+-    </Reference>
+-    <Reference Include="System.Xml.Linq" />
+-    <Reference Include="System.Data.DataSetExtensions" />
+-    <Reference Include="System.Data" />
+-    <Reference Include="System.Deployment" />
+-    <Reference Include="System.Drawing" />
+-    <Reference Include="System.Windows.Forms" />
+-    <Reference Include="System.Xml" />
+-  </ItemGroup>
+-  <ItemGroup>
+-    <Compile Include="Db\Entities.cs" />
+-    <Compile Include="Db\RecipeSlotInfo.cs" />
+-    <Compile Include="Dialogs\ExceptionDialog.cs">
+-      <SubType>Form</SubType>
+-    </Compile>
+-    <Compile Include="Dialogs\ExceptionDialog.Designer.cs">
+-      <DependentUpon>ExceptionDialog.cs</DependentUpon>
+-    </Compile>
+-    <Compile Include="Dialogs\OptionsDialog.cs">
+-      <SubType>Form</SubType>
+-    </Compile>
+-    <Compile Include="Dialogs\OptionsDialog.Designer.cs">
+-      <DependentUpon>OptionsDialog.cs</DependentUpon>
+-    </Compile>
+-    <Compile Include="UserControls\EntityColumnAttribute.cs" />
+-    <Compile Include="UserControls\EntityListView.cs">
+-      <SubType>Component</SubType>
+-    </Compile>
+-    <Compile Include="UserControls\EntityListView.Designer.cs">
+-      <DependentUpon>EntityListView.cs</DependentUpon>
+-    </Compile>
+-    <Compile Include="MainForm.cs">
+-      <SubType>Form</SubType>
+-    </Compile>
+-    <Compile Include="MainForm.Designer.cs">
+-      <DependentUpon>MainForm.cs</DependentUpon>
+-    </Compile>
+-    <Compile Include="Program.cs" />
+-    <Compile Include="Properties\AssemblyInfo.cs" />
+-    <Compile Include="RecipeResultsListViewController.cs" />
+-    <Compile Include="RecipeTreeViewController.cs" />
+-    <Compile Include="Db\RepopDb.cs" />
+-    <Compile Include="UserControls\EventArgs.cs" />
+-    <Compile Include="UserControls\ItemListSelection.cs">
+-      <SubType>UserControl</SubType>
+-    </Compile>
+-    <Compile Include="UserControls\ItemListSelection.Designer.cs">
+-      <DependentUpon>ItemListSelection.cs</DependentUpon>
+-    </Compile>
+-    <Compile Include="ManifestBuilder.cs" />
+-    <Compile Include="UserControls\ManifestCreater.cs">
+-      <SubType>UserControl</SubType>
+-    </Compile>
+-    <Compile Include="UserControls\ManifestCreater.Designer.cs">
+-      <DependentUpon>ManifestCreater.cs</DependentUpon>
+-    </Compile>
+-    <Compile Include="UserControls\OurUserControl.cs">
+-      <SubType>UserControl</SubType>
+-    </Compile>
+-    <EmbeddedResource Include="Dialogs\ExceptionDialog.resx">
+-      <DependentUpon>ExceptionDialog.cs</DependentUpon>
+-    </EmbeddedResource>
+-    <EmbeddedResource Include="Dialogs\OptionsDialog.resx">
+-      <DependentUpon>OptionsDialog.cs</DependentUpon>
+-    </EmbeddedResource>
+-    <EmbeddedResource Include="MainForm.resx">
+-      <DependentUpon>MainForm.cs</DependentUpon>
+-    </EmbeddedResource>
+-    <EmbeddedResource Include="Properties\Resources.resx">
+-      <Generator>ResXFileCodeGenerator</Generator>
+-      <LastGenOutput>Resources.Designer.cs</LastGenOutput>
+-      <SubType>Designer</SubType>
+-    </EmbeddedResource>
+-    <Compile Include="Properties\Resources.Designer.cs">
+-      <AutoGen>True</AutoGen>
+-      <DependentUpon>Resources.resx</DependentUpon>
+-      <DesignTime>True</DesignTime>
+-    </Compile>
+-    <EmbeddedResource Include="UserControls\ItemListSelection.resx">
+-      <DependentUpon>ItemListSelection.cs</DependentUpon>
+-    </EmbeddedResource>
+-    <EmbeddedResource Include="UserControls\ManifestCreater.resx">
+-      <DependentUpon>ManifestCreater.cs</DependentUpon>
+-    </EmbeddedResource>
+-    <None Include="Properties\Settings.settings">
+-      <Generator>SettingsSingleFileGenerator</Generator>
+-      <LastGenOutput>Settings.Designer.cs</LastGenOutput>
+-    </None>
+-    <Compile Include="Properties\Settings.Designer.cs">
+-      <AutoGen>True</AutoGen>
+-      <DependentUpon>Settings.settings</DependentUpon>
+-      <DesignTimeSharedInput>True</DesignTimeSharedInput>
+-    </Compile>
+-    <None Include="RePopCraftingStudio_TemporaryKey.pfx" />
+-  </ItemGroup>
+-  <ItemGroup>
+-    <None Include="App.config" />
+-  </ItemGroup>
+-  <ItemGroup>
+-    <BootstrapperPackage Include="Microsoft.Net.Client.3.5">
+-      <Visible>False</Visible>
+-      <ProductName>.NET Framework 3.5 SP1 Client Profile</ProductName>
+-      <Install>false</Install>
+-    </BootstrapperPackage>
+-    <BootstrapperPackage Include="Microsoft.Net.Framework.3.5.SP1">
+-      <Visible>False</Visible>
+-      <ProductName>.NET Framework 3.5 SP1</ProductName>
+-      <Install>true</Install>
+-    </BootstrapperPackage>
+-  </ItemGroup>
+-  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
++﻿<?xml version="1.0" encoding="utf-8"?>
++<Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
++  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
++  <PropertyGroup>
++    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
++    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
++    <ProjectGuid>{FBF611E8-052B-4ABF-B606-D70841685BC8}</ProjectGuid>
++    <OutputType>WinExe</OutputType>
++    <AppDesignerFolder>Properties</AppDesignerFolder>
++    <RootNamespace>RePopCraftingStudio</RootNamespace>
++    <AssemblyName>RePopCraftingStudio</AssemblyName>
++    <TargetFrameworkVersion>v3.5</TargetFrameworkVersion>
++    <FileAlignment>512</FileAlignment>
++    <TargetFrameworkProfile />
++    <IsWebBootstrapper>false</IsWebBootstrapper>
++    <PublishUrl>C:\dev\RepopCraftingStudio\Publish\</PublishUrl>
++    <Install>true</Install>
++    <InstallFrom>Disk</InstallFrom>
++    <UpdateEnabled>false</UpdateEnabled>
++    <UpdateMode>Foreground</UpdateMode>
++    <UpdateInterval>7</UpdateInterval>
++    <UpdateIntervalUnits>Days</UpdateIntervalUnits>
++    <UpdatePeriodically>false</UpdatePeriodically>
++    <UpdateRequired>false</UpdateRequired>
++    <MapFileExtensions>true</MapFileExtensions>
++    <ApplicationRevision>5</ApplicationRevision>
++    <ApplicationVersion>1.0.0.%2a</ApplicationVersion>
++    <UseApplicationTrust>false</UseApplicationTrust>
++    <PublishWizardCompleted>true</PublishWizardCompleted>
++    <BootstrapperEnabled>true</BootstrapperEnabled>
++  </PropertyGroup>
++  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
++    <PlatformTarget>x86</PlatformTarget>
++    <DebugSymbols>true</DebugSymbols>
++    <DebugType>full</DebugType>
++    <Optimize>false</Optimize>
++    <OutputPath>bin\Debug\</OutputPath>
++    <DefineConstants>DEBUG;TRACE</DefineConstants>
++    <ErrorReport>prompt</ErrorReport>
++    <WarningLevel>4</WarningLevel>
++    <UseVSHostingProcess>false</UseVSHostingProcess>
++    <RunCodeAnalysis>true</RunCodeAnalysis>
++  </PropertyGroup>
++  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
++    <PlatformTarget>AnyCPU</PlatformTarget>
++    <DebugType>pdbonly</DebugType>
++    <Optimize>true</Optimize>
++    <OutputPath>bin\Release\</OutputPath>
++    <DefineConstants>TRACE</DefineConstants>
++    <ErrorReport>prompt</ErrorReport>
++    <WarningLevel>4</WarningLevel>
++  </PropertyGroup>
++  <PropertyGroup>
++    <ManifestCertificateThumbprint>ED937BE7BB42F98EBF194F654C6EAC49EAFEEC4F</ManifestCertificateThumbprint>
++  </PropertyGroup>
++  <PropertyGroup>
++    <ManifestKeyFile>RePopCraftingStudio_TemporaryKey.pfx</ManifestKeyFile>
++  </PropertyGroup>
++  <PropertyGroup>
++    <GenerateManifests>true</GenerateManifests>
++  </PropertyGroup>
++  <PropertyGroup>
++    <SignManifests>false</SignManifests>
++  </PropertyGroup>
++  <ItemGroup>
++    <Reference Include="System" />
++    <Reference Include="System.Configuration" />
++    <Reference Include="System.Core" />
++    <Reference Include="System.Data.SQLite">
++      <HintPath>..\..\Libs\System.Data.SQLite.dll</HintPath>
++    </Reference>
++    <Reference Include="System.Data.SQLite.Linq">
++      <HintPath>..\..\Libs\System.Data.SQLite.Linq.dll</HintPath>
++    </Reference>
++    <Reference Include="System.Xml.Linq" />
++    <Reference Include="System.Data.DataSetExtensions" />
++    <Reference Include="System.Data" />
++    <Reference Include="System.Deployment" />
++    <Reference Include="System.Drawing" />
++    <Reference Include="System.Windows.Forms" />
++    <Reference Include="System.Xml" />
++  </ItemGroup>
++  <ItemGroup>
++    <Compile Include="Db\Entities.cs" />
++    <Compile Include="Db\RecipeSlotInfo.cs" />
++    <Compile Include="Dialogs\ExceptionDialog.cs">
++      <SubType>Form</SubType>
++    </Compile>
++    <Compile Include="Dialogs\ExceptionDialog.Designer.cs">
++      <DependentUpon>ExceptionDialog.cs</DependentUpon>
++    </Compile>
++    <Compile Include="Dialogs\OptionsDialog.cs">
++      <SubType>Form</SubType>
++    </Compile>
++    <Compile Include="Dialogs\OptionsDialog.Designer.cs">
++      <DependentUpon>OptionsDialog.cs</DependentUpon>
++    </Compile>
++    <Compile Include="UserControls\EntityColumnAttribute.cs" />
++    <Compile Include="UserControls\EntityListView.cs">
++      <SubType>Component</SubType>
++    </Compile>
++    <Compile Include="UserControls\EntityListView.Designer.cs">
++      <DependentUpon>EntityListView.cs</DependentUpon>
++    </Compile>
++    <Compile Include="MainForm.cs">
++      <SubType>Form</SubType>
++    </Compile>
++    <Compile Include="MainForm.Designer.cs">
++      <DependentUpon>MainForm.cs</DependentUpon>
++    </Compile>
++    <Compile Include="Program.cs" />
++    <Compile Include="Properties\AssemblyInfo.cs" />
++    <Compile Include="RecipeResultsListViewController.cs" />
++    <Compile Include="RecipeTreeViewController.cs" />
++    <Compile Include="Db\RepopDb.cs" />
++    <Compile Include="UserControls\EventArgs.cs" />
++    <Compile Include="UserControls\ItemListSelection.cs">
++      <SubType>UserControl</SubType>
++    </Compile>
++    <Compile Include="UserControls\ItemListSelection.Designer.cs">
++      <DependentUpon>ItemListSelection.cs</DependentUpon>
++    </Compile>
++    <Compile Include="ManifestBuilder.cs" />
++    <Compile Include="UserControls\ManifestCreater.cs">
++      <SubType>UserControl</SubType>
++    </Compile>
++    <Compile Include="UserControls\ManifestCreater.Designer.cs">
++      <DependentUpon>ManifestCreater.cs</DependentUpon>
++    </Compile>
++    <Compile Include="UserControls\OurUserControl.cs">
++      <SubType>UserControl</SubType>
++    </Compile>
++    <EmbeddedResource Include="Dialogs\ExceptionDialog.resx">
++      <DependentUpon>ExceptionDialog.cs</DependentUpon>
++    </EmbeddedResource>
++    <EmbeddedResource Include="Dialogs\OptionsDialog.resx">
++      <DependentUpon>OptionsDialog.cs</DependentUpon>
++    </EmbeddedResource>
++    <EmbeddedResource Include="MainForm.resx">
++      <DependentUpon>MainForm.cs</DependentUpon>
++    </EmbeddedResource>
++    <EmbeddedResource Include="Properties\Resources.resx">
++      <Generator>ResXFileCodeGenerator</Generator>
++      <LastGenOutput>Resources.Designer.cs</LastGenOutput>
++      <SubType>Designer</SubType>
++    </EmbeddedResource>
++    <Compile Include="Properties\Resources.Designer.cs">
++      <AutoGen>True</AutoGen>
++      <DependentUpon>Resources.resx</DependentUpon>
++      <DesignTime>True</DesignTime>
++    </Compile>
++    <EmbeddedResource Include="UserControls\ItemListSelection.resx">
++      <DependentUpon>ItemListSelection.cs</DependentUpon>
++    </EmbeddedResource>
++    <EmbeddedResource Include="UserControls\ManifestCreater.resx">
++      <DependentUpon>ManifestCreater.cs</DependentUpon>
++    </EmbeddedResource>
++    <None Include="Properties\Settings.settings">
++      <Generator>SettingsSingleFileGenerator</Generator>
++      <LastGenOutput>Settings.Designer.cs</LastGenOutput>
++    </None>
++    <Compile Include="Properties\Settings.Designer.cs">
++      <AutoGen>True</AutoGen>
++      <DependentUpon>Settings.settings</DependentUpon>
++      <DesignTimeSharedInput>True</DesignTimeSharedInput>
++    </Compile>
++    <None Include="RePopCraftingStudio_TemporaryKey.pfx" />
++  </ItemGroup>
++  <ItemGroup>
++    <None Include="App.config" />
++  </ItemGroup>
++  <ItemGroup>
++    <BootstrapperPackage Include="Microsoft.Net.Client.3.5">
++      <Visible>False</Visible>
++      <ProductName>.NET Framework 3.5 SP1 Client Profile</ProductName>
++      <Install>false</Install>
++    </BootstrapperPackage>
++    <BootstrapperPackage Include="Microsoft.Net.Framework.3.5.SP1">
++      <Visible>False</Visible>
++      <ProductName>.NET Framework 3.5 SP1</ProductName>
++      <Install>true</Install>
++    </BootstrapperPackage>
++  </ItemGroup>
++  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
+        Other similar extension points exist, see Microsoft.Common.targets.
+   <Target Name="BeforeBuild">
+   </Target>
+   <Target Name="AfterBuild">
+   </Target>
+-  -->
++  -->
+ </Project>
+\ No newline at end of file
+diff --git a/Projects/RePopCraftingStudio/UserControls/EntityListView.cs b/Projects/RePopCraftingStudio/UserControls/EntityListView.cs
+index f95cc21..18c0e63 100644
+--- a/Projects/RePopCraftingStudio/UserControls/EntityListView.cs
++++ b/Projects/RePopCraftingStudio/UserControls/EntityListView.cs
+@@ -56,10 +56,13 @@ namespace RePopCraftingStudio.UserControls
+                {
+                   item.SubItems.Add( value );
+                }
++            }
++
++            if (item != null)
++            {
++                item.BackColor = backColor;
++                item.Tag = entity;
+             }
+-
+-            item.BackColor = backColor;
+-            item.Tag = entity;
+          }
+       }
+ 
+diff --git a/Projects/RePopCraftingStudio/UserControls/ItemListSelection.Designer.cs b/Projects/RePopCraftingStudio/UserControls/ItemListSelection.Designer.cs
+index b9b10f4..277067a 100644
+--- a/Projects/RePopCraftingStudio/UserControls/ItemListSelection.Designer.cs
++++ b/Projects/RePopCraftingStudio/UserControls/ItemListSelection.Designer.cs
+@@ -1,202 +1,235 @@
+-﻿namespace RePopCraftingStudio.UserControls
+-{
+-   partial class ItemListSelection
+-   {
+-      /// <summary> 
+-      /// Required designer variable.
+-      /// </summary>
+-      private System.ComponentModel.IContainer components = null;
+-
+-      /// <summary> 
+-      /// Clean up any resources being used.
+-      /// </summary>
+-      /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
+-      protected override void Dispose( bool disposing )
+-      {
+-         if ( disposing && ( components != null ) )
+-         {
+-            components.Dispose();
+-         }
+-         base.Dispose( disposing );
+-      }
+-
+-      #region Component Designer generated code
+-
+-      /// <summary> 
+-      /// Required method for Designer support - do not modify 
+-      /// the contents of this method with the code editor.
+-      /// </summary>
+-      private void InitializeComponent()
+-      {
+-         this.selectionTabControl = new System.Windows.Forms.TabControl();
+-         this.tabPage1 = new System.Windows.Forms.TabPage();
+-         this.itemsListView = new RePopCraftingStudio.UserControls.EntityListView();
+-         this.tabPage2 = new System.Windows.Forms.TabPage();
+-         this.fittingsListView = new RePopCraftingStudio.UserControls.EntityListView();
+-         this.tabPage3 = new System.Windows.Forms.TabPage();
+-         this.blueprintsListView = new RePopCraftingStudio.UserControls.EntityListView();
+-         this.panel1 = new System.Windows.Forms.Panel();
+-         this.searchTextBox = new System.Windows.Forms.TextBox();
+-         this.label1 = new System.Windows.Forms.Label();
+-         this.selectionTabControl.SuspendLayout();
+-         this.tabPage1.SuspendLayout();
+-         this.tabPage2.SuspendLayout();
+-         this.tabPage3.SuspendLayout();
+-         this.panel1.SuspendLayout();
+-         this.SuspendLayout();
+-         // 
+-         // selectionTabControl
+-         // 
+-         this.selectionTabControl.Controls.Add(this.tabPage1);
+-         this.selectionTabControl.Controls.Add(this.tabPage2);
+-         this.selectionTabControl.Controls.Add(this.tabPage3);
+-         this.selectionTabControl.Dock = System.Windows.Forms.DockStyle.Fill;
+-         this.selectionTabControl.Location = new System.Drawing.Point(0, 43);
+-         this.selectionTabControl.Name = "selectionTabControl";
+-         this.selectionTabControl.SelectedIndex = 0;
+-         this.selectionTabControl.Size = new System.Drawing.Size(377, 394);
+-         this.selectionTabControl.TabIndex = 1;
+-         this.selectionTabControl.SelectedIndexChanged += new System.EventHandler(this.selectionTabControl_SelectedIndexChanged);
+-         // 
+-         // tabPage1
+-         // 
+-         this.tabPage1.Controls.Add(this.itemsListView);
+-         this.tabPage1.Location = new System.Drawing.Point(4, 22);
+-         this.tabPage1.Name = "tabPage1";
+-         this.tabPage1.Padding = new System.Windows.Forms.Padding(3);
+-         this.tabPage1.Size = new System.Drawing.Size(369, 368);
+-         this.tabPage1.TabIndex = 0;
+-         this.tabPage1.Text = "Items";
+-         this.tabPage1.UseVisualStyleBackColor = true;
+-         // 
+-         // itemsListView
+-         // 
+-         this.itemsListView.AlternateLineItemColor = System.Drawing.Color.LightCyan;
+-         this.itemsListView.Dock = System.Windows.Forms.DockStyle.Fill;
+-         this.itemsListView.EntityType = null;
+-         this.itemsListView.FullRowSelect = true;
+-         this.itemsListView.HideSelection = false;
+-         this.itemsListView.Location = new System.Drawing.Point(3, 3);
+-         this.itemsListView.MultiSelect = false;
+-         this.itemsListView.Name = "itemsListView";
+-         this.itemsListView.Size = new System.Drawing.Size(363, 362);
+-         this.itemsListView.TabIndex = 0;
+-         this.itemsListView.UseCompatibleStateImageBehavior = false;
+-         this.itemsListView.View = System.Windows.Forms.View.Details;
+-         this.itemsListView.SelectedIndexChanged += new System.EventHandler(this.EntityListView_SelectedIndexChanged);
+-         // 
+-         // tabPage2
+-         // 
+-         this.tabPage2.Controls.Add(this.fittingsListView);
+-         this.tabPage2.Location = new System.Drawing.Point(4, 22);
+-         this.tabPage2.Name = "tabPage2";
+-         this.tabPage2.Padding = new System.Windows.Forms.Padding(3);
+-         this.tabPage2.Size = new System.Drawing.Size(369, 368);
+-         this.tabPage2.TabIndex = 1;
+-         this.tabPage2.Text = "Fittings";
+-         this.tabPage2.UseVisualStyleBackColor = true;
+-         // 
+-         // fittingsListView
+-         // 
+-         this.fittingsListView.AlternateLineItemColor = System.Drawing.Color.LightCyan;
+-         this.fittingsListView.Dock = System.Windows.Forms.DockStyle.Fill;
+-         this.fittingsListView.EntityType = null;
+-         this.fittingsListView.FullRowSelect = true;
+-         this.fittingsListView.HideSelection = false;
+-         this.fittingsListView.Location = new System.Drawing.Point(3, 3);
+-         this.fittingsListView.MultiSelect = false;
+-         this.fittingsListView.Name = "fittingsListView";
+-         this.fittingsListView.Size = new System.Drawing.Size(363, 362);
+-         this.fittingsListView.TabIndex = 0;
+-         this.fittingsListView.UseCompatibleStateImageBehavior = false;
+-         this.fittingsListView.View = System.Windows.Forms.View.Details;
+-         this.fittingsListView.SelectedIndexChanged += new System.EventHandler(this.EntityListView_SelectedIndexChanged);
+-         // 
+-         // tabPage3
+-         // 
+-         this.tabPage3.Controls.Add(this.blueprintsListView);
+-         this.tabPage3.Location = new System.Drawing.Point(4, 22);
+-         this.tabPage3.Name = "tabPage3";
+-         this.tabPage3.Size = new System.Drawing.Size(369, 368);
+-         this.tabPage3.TabIndex = 2;
+-         this.tabPage3.Text = "Blueprints";
+-         this.tabPage3.UseVisualStyleBackColor = true;
+-         // 
+-         // blueprintsListView
+-         // 
+-         this.blueprintsListView.AlternateLineItemColor = System.Drawing.Color.LightCyan;
+-         this.blueprintsListView.Dock = System.Windows.Forms.DockStyle.Fill;
+-         this.blueprintsListView.EntityType = null;
+-         this.blueprintsListView.FullRowSelect = true;
+-         this.blueprintsListView.HideSelection = false;
+-         this.blueprintsListView.Location = new System.Drawing.Point(0, 0);
+-         this.blueprintsListView.MultiSelect = false;
+-         this.blueprintsListView.Name = "blueprintsListView";
+-         this.blueprintsListView.Size = new System.Drawing.Size(369, 368);
+-         this.blueprintsListView.TabIndex = 0;
+-         this.blueprintsListView.UseCompatibleStateImageBehavior = false;
+-         this.blueprintsListView.View = System.Windows.Forms.View.Details;
+-         this.blueprintsListView.SelectedIndexChanged += new System.EventHandler(this.EntityListView_SelectedIndexChanged);
+-         // 
+-         // panel1
+-         // 
+-         this.panel1.Controls.Add(this.searchTextBox);
+-         this.panel1.Controls.Add(this.label1);
+-         this.panel1.Dock = System.Windows.Forms.DockStyle.Top;
+-         this.panel1.Location = new System.Drawing.Point(0, 0);
+-         this.panel1.Name = "panel1";
+-         this.panel1.Size = new System.Drawing.Size(377, 43);
+-         this.panel1.TabIndex = 2;
+-         // 
+-         // searchTextBox
+-         // 
+-         this.searchTextBox.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
+-            | System.Windows.Forms.AnchorStyles.Right)));
+-         this.searchTextBox.Location = new System.Drawing.Point(53, 12);
+-         this.searchTextBox.Name = "searchTextBox";
+-         this.searchTextBox.Size = new System.Drawing.Size(320, 20);
+-         this.searchTextBox.TabIndex = 1;
+-         this.searchTextBox.TextChanged += new System.EventHandler(this.searchTextBox_TextChanged);
+-         // 
+-         // label1
+-         // 
+-         this.label1.AutoSize = true;
+-         this.label1.Location = new System.Drawing.Point(3, 15);
+-         this.label1.Name = "label1";
+-         this.label1.Size = new System.Drawing.Size(44, 13);
+-         this.label1.TabIndex = 0;
+-         this.label1.Text = "Search:";
+-         // 
+-         // ItemListSelection
+-         // 
+-         this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
+-         this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
+-         this.Controls.Add(this.selectionTabControl);
+-         this.Controls.Add(this.panel1);
+-         this.Name = "ItemListSelection";
+-         this.Size = new System.Drawing.Size(377, 437);
+-         this.Load += new System.EventHandler(this.ItemListSelection_Load);
+-         this.selectionTabControl.ResumeLayout(false);
+-         this.tabPage1.ResumeLayout(false);
+-         this.tabPage2.ResumeLayout(false);
+-         this.tabPage3.ResumeLayout(false);
+-         this.panel1.ResumeLayout(false);
+-         this.panel1.PerformLayout();
+-         this.ResumeLayout(false);
+-
+-      }
+-
+-      #endregion
+-
+-      private System.Windows.Forms.TabControl selectionTabControl;
+-      private System.Windows.Forms.TabPage tabPage1;
+-      private System.Windows.Forms.TabPage tabPage2;
+-      private System.Windows.Forms.TabPage tabPage3;
+-      private System.Windows.Forms.Panel panel1;
+-      private System.Windows.Forms.TextBox searchTextBox;
+-      private System.Windows.Forms.Label label1;
+-      private EntityListView itemsListView;
+-      private EntityListView fittingsListView;
+-      private EntityListView blueprintsListView;
+-   }
+-}
++﻿namespace RePopCraftingStudio.UserControls
++{
++   partial class ItemListSelection
++   {
++      /// <summary> 
++      /// Required designer variable.
++      /// </summary>
++      private System.ComponentModel.IContainer components = null;
++
++      /// <summary> 
++      /// Clean up any resources being used.
++      /// </summary>
++      /// <param name="disposing">true if managed resources should be disposed; otherwise, false.</param>
++      protected override void Dispose( bool disposing )
++      {
++         if ( disposing && ( components != null ) )
++         {
++            components.Dispose();
++         }
++         base.Dispose( disposing );
++      }
++
++      #region Component Designer generated code
++
++      /// <summary> 
++      /// Required method for Designer support - do not modify 
++      /// the contents of this method with the code editor.
++      /// </summary>
++      private void InitializeComponent()
++      {
++            this.selectionTabControl = new System.Windows.Forms.TabControl();
++            this.tabPage1 = new System.Windows.Forms.TabPage();
++            this.itemsListView = new RePopCraftingStudio.UserControls.EntityListView();
++            this.tabPage2 = new System.Windows.Forms.TabPage();
++            this.fittingsListView = new RePopCraftingStudio.UserControls.EntityListView();
++            this.tabPage3 = new System.Windows.Forms.TabPage();
++            this.blueprintsListView = new RePopCraftingStudio.UserControls.EntityListView();
++            this.tabPage4 = new System.Windows.Forms.TabPage();
++            this.recipeListView = new RePopCraftingStudio.UserControls.EntityListView();
++            this.panel1 = new System.Windows.Forms.Panel();
++            this.searchTextBox = new System.Windows.Forms.TextBox();
++            this.label1 = new System.Windows.Forms.Label();
++            this.selectionTabControl.SuspendLayout();
++            this.tabPage1.SuspendLayout();
++            this.tabPage2.SuspendLayout();
++            this.tabPage3.SuspendLayout();
++            this.tabPage4.SuspendLayout();
++            this.panel1.SuspendLayout();
++            this.SuspendLayout();
++            // 
++            // selectionTabControl
++            // 
++            this.selectionTabControl.Controls.Add(this.tabPage1);
++            this.selectionTabControl.Controls.Add(this.tabPage2);
++            this.selectionTabControl.Controls.Add(this.tabPage3);
++            this.selectionTabControl.Controls.Add(this.tabPage4);
++            this.selectionTabControl.Dock = System.Windows.Forms.DockStyle.Fill;
++            this.selectionTabControl.Location = new System.Drawing.Point(0, 43);
++            this.selectionTabControl.Name = "selectionTabControl";
++            this.selectionTabControl.SelectedIndex = 0;
++            this.selectionTabControl.Size = new System.Drawing.Size(377, 394);
++            this.selectionTabControl.TabIndex = 1;
++            this.selectionTabControl.SelectedIndexChanged += new System.EventHandler(this.selectionTabControl_SelectedIndexChanged);
++            // 
++            // tabPage1
++            // 
++            this.tabPage1.Controls.Add(this.itemsListView);
++            this.tabPage1.Location = new System.Drawing.Point(4, 22);
++            this.tabPage1.Name = "tabPage1";
++            this.tabPage1.Padding = new System.Windows.Forms.Padding(3);
++            this.tabPage1.Size = new System.Drawing.Size(369, 368);
++            this.tabPage1.TabIndex = 0;
++            this.tabPage1.Text = "Items";
++            this.tabPage1.UseVisualStyleBackColor = true;
++            // 
++            // itemsListView
++            // 
++            this.itemsListView.AlternateLineItemColor = System.Drawing.Color.LightCyan;
++            this.itemsListView.Dock = System.Windows.Forms.DockStyle.Fill;
++            this.itemsListView.EntityType = null;
++            this.itemsListView.FullRowSelect = true;
++            this.itemsListView.HideSelection = false;
++            this.itemsListView.Location = new System.Drawing.Point(3, 3);
++            this.itemsListView.MultiSelect = false;
++            this.itemsListView.Name = "itemsListView";
++            this.itemsListView.Size = new System.Drawing.Size(363, 362);
++            this.itemsListView.TabIndex = 0;
++            this.itemsListView.UseCompatibleStateImageBehavior = false;
++            this.itemsListView.View = System.Windows.Forms.View.Details;
++            this.itemsListView.SelectedIndexChanged += new System.EventHandler(this.EntityListView_SelectedIndexChanged);
++            // 
++            // tabPage2
++            // 
++            this.tabPage2.Controls.Add(this.fittingsListView);
++            this.tabPage2.Location = new System.Drawing.Point(4, 22);
++            this.tabPage2.Name = "tabPage2";
++            this.tabPage2.Padding = new System.Windows.Forms.Padding(3);
++            this.tabPage2.Size = new System.Drawing.Size(369, 368);
++            this.tabPage2.TabIndex = 1;
++            this.tabPage2.Text = "Fittings";
++            this.tabPage2.UseVisualStyleBackColor = true;
++            // 
++            // fittingsListView
++            // 
++            this.fittingsListView.AlternateLineItemColor = System.Drawing.Color.LightCyan;
++            this.fittingsListView.Dock = System.Windows.Forms.DockStyle.Fill;
++            this.fittingsListView.EntityType = null;
++            this.fittingsListView.FullRowSelect = true;
++            this.fittingsListView.HideSelection = false;
++            this.fittingsListView.Location = new System.Drawing.Point(3, 3);
++            this.fittingsListView.MultiSelect = false;
++            this.fittingsListView.Name = "fittingsListView";
++            this.fittingsListView.Size = new System.Drawing.Size(363, 362);
++            this.fittingsListView.TabIndex = 0;
++            this.fittingsListView.UseCompatibleStateImageBehavior = false;
++            this.fittingsListView.View = System.Windows.Forms.View.Details;
++            this.fittingsListView.SelectedIndexChanged += new System.EventHandler(this.EntityListView_SelectedIndexChanged);
++            // 
++            // tabPage3
++            // 
++            this.tabPage3.Controls.Add(this.blueprintsListView);
++            this.tabPage3.Location = new System.Drawing.Point(4, 22);
++            this.tabPage3.Name = "tabPage3";
++            this.tabPage3.Size = new System.Drawing.Size(369, 368);
++            this.tabPage3.TabIndex = 2;
++            this.tabPage3.Text = "Blueprints";
++            this.tabPage3.UseVisualStyleBackColor = true;
++            // 
++            // blueprintsListView
++            // 
++            this.blueprintsListView.AlternateLineItemColor = System.Drawing.Color.LightCyan;
++            this.blueprintsListView.Dock = System.Windows.Forms.DockStyle.Fill;
++            this.blueprintsListView.EntityType = null;
++            this.blueprintsListView.FullRowSelect = true;
++            this.blueprintsListView.HideSelection = false;
++            this.blueprintsListView.Location = new System.Drawing.Point(0, 0);
++            this.blueprintsListView.MultiSelect = false;
++            this.blueprintsListView.Name = "blueprintsListView";
++            this.blueprintsListView.Size = new System.Drawing.Size(369, 368);
++            this.blueprintsListView.TabIndex = 0;
++            this.blueprintsListView.UseCompatibleStateImageBehavior = false;
++            this.blueprintsListView.View = System.Windows.Forms.View.Details;
++            this.blueprintsListView.SelectedIndexChanged += new System.EventHandler(this.EntityListView_SelectedIndexChanged);
++            // 
++            // tabPage4
++            // 
++            this.tabPage4.Controls.Add(this.recipeListView);
++            this.tabPage4.Location = new System.Drawing.Point(4, 22);
++            this.tabPage4.Name = "tabPage4";
++            this.tabPage4.Padding = new System.Windows.Forms.Padding(3);
++            this.tabPage4.Size = new System.Drawing.Size(369, 368);
++            this.tabPage4.TabIndex = 3;
++            this.tabPage4.Text = "Recipes";
++            this.tabPage4.UseVisualStyleBackColor = true;
++            // 
++            // recipeListView
++            // 
++            this.recipeListView.AlternateLineItemColor = System.Drawing.Color.LightCyan;
++            this.recipeListView.EntityType = null;
++            this.recipeListView.FullRowSelect = true;
++            this.recipeListView.HideSelection = false;
++            this.recipeListView.Location = new System.Drawing.Point(0, 0);
++            this.recipeListView.MultiSelect = false;
++            this.recipeListView.Name = "recipeListView";
++            this.recipeListView.Size = new System.Drawing.Size(369, 368);
++            this.recipeListView.TabIndex = 0;
++            this.recipeListView.UseCompatibleStateImageBehavior = false;
++            this.recipeListView.View = System.Windows.Forms.View.Details;
++            this.recipeListView.SelectedIndexChanged += new System.EventHandler(this.EntityListView_SelectedIndexChanged);
++            // 
++            // panel1
++            // 
++            this.panel1.Controls.Add(this.searchTextBox);
++            this.panel1.Controls.Add(this.label1);
++            this.panel1.Dock = System.Windows.Forms.DockStyle.Top;
++            this.panel1.Location = new System.Drawing.Point(0, 0);
++            this.panel1.Name = "panel1";
++            this.panel1.Size = new System.Drawing.Size(377, 43);
++            this.panel1.TabIndex = 2;
++            // 
++            // searchTextBox
++            // 
++            this.searchTextBox.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) 
++            | System.Windows.Forms.AnchorStyles.Right)));
++            this.searchTextBox.Location = new System.Drawing.Point(53, 12);
++            this.searchTextBox.Name = "searchTextBox";
++            this.searchTextBox.Size = new System.Drawing.Size(320, 20);
++            this.searchTextBox.TabIndex = 1;
++            this.searchTextBox.TextChanged += new System.EventHandler(this.searchTextBox_TextChanged);
++            // 
++            // label1
++            // 
++            this.label1.AutoSize = true;
++            this.label1.Location = new System.Drawing.Point(3, 15);
++            this.label1.Name = "label1";
++            this.label1.Size = new System.Drawing.Size(44, 13);
++            this.label1.TabIndex = 0;
++            this.label1.Text = "Search:";
++            // 
++            // ItemListSelection
++            // 
++            this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
++            this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
++            this.Controls.Add(this.selectionTabControl);
++            this.Controls.Add(this.panel1);
++            this.Name = "ItemListSelection";
++            this.Size = new System.Drawing.Size(377, 437);
++            this.Load += new System.EventHandler(this.ItemListSelection_Load);
++            this.selectionTabControl.ResumeLayout(false);
++            this.tabPage1.ResumeLayout(false);
++            this.tabPage2.ResumeLayout(false);
++            this.tabPage3.ResumeLayout(false);
++            this.tabPage4.ResumeLayout(false);
++            this.panel1.ResumeLayout(false);
++            this.panel1.PerformLayout();
++            this.ResumeLayout(false);
++
++      }
++
++      #endregion
++
++      private System.Windows.Forms.TabControl selectionTabControl;
++      private System.Windows.Forms.TabPage tabPage1;
++      private System.Windows.Forms.TabPage tabPage2;
++      private System.Windows.Forms.TabPage tabPage3;
++      private System.Windows.Forms.Panel panel1;
++      private System.Windows.Forms.TextBox searchTextBox;
++      private System.Windows.Forms.Label label1;
++      private EntityListView itemsListView;
++      private EntityListView fittingsListView;
++      private EntityListView blueprintsListView;
++      private System.Windows.Forms.TabPage tabPage4;
++      private EntityListView recipeListView;
++   }
++}
+diff --git a/Projects/RePopCraftingStudio/UserControls/ItemListSelection.cs b/Projects/RePopCraftingStudio/UserControls/ItemListSelection.cs
+index a793600..82862cc 100644
+--- a/Projects/RePopCraftingStudio/UserControls/ItemListSelection.cs
++++ b/Projects/RePopCraftingStudio/UserControls/ItemListSelection.cs
+@@ -27,6 +27,7 @@ namespace RePopCraftingStudio.UserControls
+                      {0, Db.SelectItemEntitiesByName},
+                      {1, Db.SelectFittingEntitiessByName},
+                      {2, Db.SelectBlueprintEntitiesByName},
++                     {3, Db.SelectRecipeEntitiesByName},
+                   };
+             }
+ 
+@@ -55,11 +56,13 @@ namespace RePopCraftingStudio.UserControls
+                {0, itemsListView},
+                {1, fittingsListView},
+                {2, blueprintsListView},
++               {3, recipeListView},
+             };
+ 
+          itemsListView.EntityType = typeof( Item );
+          fittingsListView.EntityType = typeof( Fitting );
+-         blueprintsListView.EntityType = typeof( Blueprint );
++         blueprintsListView.EntityType = typeof( Blueprint );
++         recipeListView.EntityType = typeof( Recipe );
+       }
+ 
+       public override void LoadSettings()
+diff --git a/Projects/RePopCraftingStudio/UserControls/ItemListSelection.resx b/Projects/RePopCraftingStudio/UserControls/ItemListSelection.resx
+index 7080a7d..5ea0895 100644
+--- a/Projects/RePopCraftingStudio/UserControls/ItemListSelection.resx
++++ b/Projects/RePopCraftingStudio/UserControls/ItemListSelection.resx
+@@ -1,120 +1,120 @@
+-﻿<?xml version="1.0" encoding="utf-8"?>
+-<root>
+-  <!-- 
+-    Microsoft ResX Schema 
+-    
+-    Version 2.0
+-    
+-    The primary goals of this format is to allow a simple XML format 
+-    that is mostly human readable. The generation and parsing of the 
+-    various data types are done through the TypeConverter classes 
+-    associated with the data types.
+-    
+-    Example:
+-    
+-    ... ado.net/XML headers & schema ...
+-    <resheader name="resmimetype">text/microsoft-resx</resheader>
+-    <resheader name="version">2.0</resheader>
+-    <resheader name="reader">System.Resources.ResXResourceReader, System.Windows.Forms, ...</resheader>
+-    <resheader name="writer">System.Resources.ResXResourceWriter, System.Windows.Forms, ...</resheader>
+-    <data name="Name1"><value>this is my long string</value><comment>this is a comment</comment></data>
+-    <data name="Color1" type="System.Drawing.Color, System.Drawing">Blue</data>
+-    <data name="Bitmap1" mimetype="application/x-microsoft.net.object.binary.base64">
+-        <value>[base64 mime encoded serialized .NET Framework object]</value>
+-    </data>
+-    <data name="Icon1" type="System.Drawing.Icon, System.Drawing" mimetype="application/x-microsoft.net.object.bytearray.base64">
+-        <value>[base64 mime encoded string representing a byte array form of the .NET Framework object]</value>
+-        <comment>This is a comment</comment>
+-    </data>
+-                
+-    There are any number of "resheader" rows that contain simple 
+-    name/value pairs.
+-    
+-    Each data row contains a name, and value. The row also contains a 
+-    type or mimetype. Type corresponds to a .NET class that support 
+-    text/value conversion through the TypeConverter architecture. 
+-    Classes that don't support this are serialized and stored with the 
+-    mimetype set.
+-    
+-    The mimetype is used for serialized objects, and tells the 
+-    ResXResourceReader how to depersist the object. This is currently not 
+-    extensible. For a given mimetype the value must be set accordingly:
+-    
+-    Note - application/x-microsoft.net.object.binary.base64 is the format 
+-    that the ResXResourceWriter will generate, however the reader can 
+-    read any of the formats listed below.
+-    
+-    mimetype: application/x-microsoft.net.object.binary.base64
+-    value   : The object must be serialized with 
+-            : System.Runtime.Serialization.Formatters.Binary.BinaryFormatter
+-            : and then encoded with base64 encoding.
+-    
+-    mimetype: application/x-microsoft.net.object.soap.base64
+-    value   : The object must be serialized with 
+-            : System.Runtime.Serialization.Formatters.Soap.SoapFormatter
+-            : and then encoded with base64 encoding.
+-
+-    mimetype: application/x-microsoft.net.object.bytearray.base64
+-    value   : The object must be serialized into a byte array 
+-            : using a System.ComponentModel.TypeConverter
+-            : and then encoded with base64 encoding.
+-    -->
+-  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+-    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+-    <xsd:element name="root" msdata:IsDataSet="true">
+-      <xsd:complexType>
+-        <xsd:choice maxOccurs="unbounded">
+-          <xsd:element name="metadata">
+-            <xsd:complexType>
+-              <xsd:sequence>
+-                <xsd:element name="value" type="xsd:string" minOccurs="0" />
+-              </xsd:sequence>
+-              <xsd:attribute name="name" use="required" type="xsd:string" />
+-              <xsd:attribute name="type" type="xsd:string" />
+-              <xsd:attribute name="mimetype" type="xsd:string" />
+-              <xsd:attribute ref="xml:space" />
+-            </xsd:complexType>
+-          </xsd:element>
+-          <xsd:element name="assembly">
+-            <xsd:complexType>
+-              <xsd:attribute name="alias" type="xsd:string" />
+-              <xsd:attribute name="name" type="xsd:string" />
+-            </xsd:complexType>
+-          </xsd:element>
+-          <xsd:element name="data">
+-            <xsd:complexType>
+-              <xsd:sequence>
+-                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+-                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+-              </xsd:sequence>
+-              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+-              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+-              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+-              <xsd:attribute ref="xml:space" />
+-            </xsd:complexType>
+-          </xsd:element>
+-          <xsd:element name="resheader">
+-            <xsd:complexType>
+-              <xsd:sequence>
+-                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+-              </xsd:sequence>
+-              <xsd:attribute name="name" type="xsd:string" use="required" />
+-            </xsd:complexType>
+-          </xsd:element>
+-        </xsd:choice>
+-      </xsd:complexType>
+-    </xsd:element>
+-  </xsd:schema>
+-  <resheader name="resmimetype">
+-    <value>text/microsoft-resx</value>
+-  </resheader>
+-  <resheader name="version">
+-    <value>2.0</value>
+-  </resheader>
+-  <resheader name="reader">
+-    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+-  </resheader>
+-  <resheader name="writer">
+-    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+-  </resheader>
++﻿<?xml version="1.0" encoding="utf-8"?>
++<root>
++  <!-- 
++    Microsoft ResX Schema 
++    
++    Version 2.0
++    
++    The primary goals of this format is to allow a simple XML format 
++    that is mostly human readable. The generation and parsing of the 
++    various data types are done through the TypeConverter classes 
++    associated with the data types.
++    
++    Example:
++    
++    ... ado.net/XML headers & schema ...
++    <resheader name="resmimetype">text/microsoft-resx</resheader>
++    <resheader name="version">2.0</resheader>
++    <resheader name="reader">System.Resources.ResXResourceReader, System.Windows.Forms, ...</resheader>
++    <resheader name="writer">System.Resources.ResXResourceWriter, System.Windows.Forms, ...</resheader>
++    <data name="Name1"><value>this is my long string</value><comment>this is a comment</comment></data>
++    <data name="Color1" type="System.Drawing.Color, System.Drawing">Blue</data>
++    <data name="Bitmap1" mimetype="application/x-microsoft.net.object.binary.base64">
++        <value>[base64 mime encoded serialized .NET Framework object]</value>
++    </data>
++    <data name="Icon1" type="System.Drawing.Icon, System.Drawing" mimetype="application/x-microsoft.net.object.bytearray.base64">
++        <value>[base64 mime encoded string representing a byte array form of the .NET Framework object]</value>
++        <comment>This is a comment</comment>
++    </data>
++                
++    There are any number of "resheader" rows that contain simple 
++    name/value pairs.
++    
++    Each data row contains a name, and value. The row also contains a 
++    type or mimetype. Type corresponds to a .NET class that support 
++    text/value conversion through the TypeConverter architecture. 
++    Classes that don't support this are serialized and stored with the 
++    mimetype set.
++    
++    The mimetype is used for serialized objects, and tells the 
++    ResXResourceReader how to depersist the object. This is currently not 
++    extensible. For a given mimetype the value must be set accordingly:
++    
++    Note - application/x-microsoft.net.object.binary.base64 is the format 
++    that the ResXResourceWriter will generate, however the reader can 
++    read any of the formats listed below.
++    
++    mimetype: application/x-microsoft.net.object.binary.base64
++    value   : The object must be serialized with 
++            : System.Runtime.Serialization.Formatters.Binary.BinaryFormatter
++            : and then encoded with base64 encoding.
++    
++    mimetype: application/x-microsoft.net.object.soap.base64
++    value   : The object must be serialized with 
++            : System.Runtime.Serialization.Formatters.Soap.SoapFormatter
++            : and then encoded with base64 encoding.
++
++    mimetype: application/x-microsoft.net.object.bytearray.base64
++    value   : The object must be serialized into a byte array 
++            : using a System.ComponentModel.TypeConverter
++            : and then encoded with base64 encoding.
++    -->
++  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
++    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
++    <xsd:element name="root" msdata:IsDataSet="true">
++      <xsd:complexType>
++        <xsd:choice maxOccurs="unbounded">
++          <xsd:element name="metadata">
++            <xsd:complexType>
++              <xsd:sequence>
++                <xsd:element name="value" type="xsd:string" minOccurs="0" />
++              </xsd:sequence>
++              <xsd:attribute name="name" use="required" type="xsd:string" />
++              <xsd:attribute name="type" type="xsd:string" />
++              <xsd:attribute name="mimetype" type="xsd:string" />
++              <xsd:attribute ref="xml:space" />
++            </xsd:complexType>
++          </xsd:element>
++          <xsd:element name="assembly">
++            <xsd:complexType>
++              <xsd:attribute name="alias" type="xsd:string" />
++              <xsd:attribute name="name" type="xsd:string" />
++            </xsd:complexType>
++          </xsd:element>
++          <xsd:element name="data">
++            <xsd:complexType>
++              <xsd:sequence>
++                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
++                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
++              </xsd:sequence>
++              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
++              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
++              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
++              <xsd:attribute ref="xml:space" />
++            </xsd:complexType>
++          </xsd:element>
++          <xsd:element name="resheader">
++            <xsd:complexType>
++              <xsd:sequence>
++                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
++              </xsd:sequence>
++              <xsd:attribute name="name" type="xsd:string" use="required" />
++            </xsd:complexType>
++          </xsd:element>
++        </xsd:choice>
++      </xsd:complexType>
++    </xsd:element>
++  </xsd:schema>
++  <resheader name="resmimetype">
++    <value>text/microsoft-resx</value>
++  </resheader>
++  <resheader name="version">
++    <value>2.0</value>
++  </resheader>
++  <resheader name="reader">
++    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
++  </resheader>
++  <resheader name="writer">
++    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
++  </resheader>
+ </root>
+\ No newline at end of file
+diff --git a/Projects/RePopCraftingStudio/UserControls/ManifestCreater.cs b/Projects/RePopCraftingStudio/UserControls/ManifestCreater.cs
+index 2b95bd3..42e6b1d 100644
+--- a/Projects/RePopCraftingStudio/UserControls/ManifestCreater.cs
++++ b/Projects/RePopCraftingStudio/UserControls/ManifestCreater.cs
+@@ -124,8 +124,12 @@ namespace RePopCraftingStudio.UserControls
+       {
+          IEnumerable<Recipe> recipes = Db.SelectRecipesByResultIdandType( entityId, entityType );
+          if ( !recipes.Any() )
+-            return;
+-
++            return;
++
++         if (entityType == EntityTypes.Recipe)
++         {
++             entityId = 0;
++         }
+          AddRecipeToNode( entityNode, recipes, recipes.First(), entityId );
+       }
+ 
+@@ -166,7 +170,7 @@ namespace RePopCraftingStudio.UserControls
+          if ( !recipeResults.Any() )
+          {
+             MessageBox.Show( "DB failed to return results. Possible issue.", "Diagnostics", MessageBoxButtons.OK );
+-            return;
++            //FIXME: return;
+          }
+ 
+          AddRecipeResultsToNode( recipeNode, recipeResults, recipeResults.First() );
+@@ -393,13 +397,14 @@ namespace RePopCraftingStudio.UserControls
+          public NamedEntity Entity { get; private set; }
+          public bool IsItem { get { return Entity is Item; } }
+          public bool IsFitting { get { return Entity is Fitting; } }
+-         public bool IsBlueprint { get { return Entity is Blueprint; } }
++         public bool IsBlueprint { get { return Entity is Blueprint; } }
++         public bool IsRecipe { get { return Entity is Recipe; } }
+ 
+          public long Id { get { return Entity.Id; } }
+          public string Name { get { return Entity.Name; } }
+          public EntityTypes EntityType
+          {
+-            get { return IsItem ? EntityTypes.Item : IsFitting ? EntityTypes.Fitting : EntityTypes.Blueprint; }
++            get { return IsItem ? EntityTypes.Item : IsFitting ? EntityTypes.Fitting : IsRecipe ? EntityTypes.Recipe : EntityTypes.Blueprint; }
+          }
+       }
+ 
