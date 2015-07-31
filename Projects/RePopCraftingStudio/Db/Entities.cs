@@ -54,8 +54,11 @@ namespace RePopCraftingStudio.Db
    }
 
    [DebuggerDisplay( @"{ItemId}: {Name}" )]
-   public class Item : NamedEntity
+   public class Item : NamedEntity, IComparable<Item>
    {
+       public IList<ItemCraftingComponent> itemCraftingComponentList = new List<ItemCraftingComponent>();
+       public IList<ItemCraftingFilter> itemCraftingFilterList = new List<ItemCraftingFilter>();
+
       public Item( RepopDb db, object[] items )
          : base( db, items )
       {
@@ -70,6 +73,24 @@ namespace RePopCraftingStudio.Db
       public long IconId { get { return (long)Items[ 3 ]; } }
 
       public override string ToString() { return Name; }
+
+      public int CompareTo(Item a)
+      {
+          int ret = Name.CompareTo(a.Name);
+          if (ret != 0)
+          {
+              return ret;
+          }
+          if (Id < a.Id)
+          {
+              return -1;
+          }
+          if (Id > a.Id)
+          {
+              return 1;
+          }
+          return 0;
+      }
    }
 
    [DebuggerDisplay( @"{FittingId}: {Name}" )]
@@ -132,7 +153,7 @@ namespace RePopCraftingStudio.Db
    }
 
    [DebuggerDisplay(@"{RecipeId}: {Name}")]
-   public class Recipe : NamedEntity
+   public class Recipe : NamedEntity, IComparable<Recipe>
    {
       public IList<RecipeResult> recipeResultList = new List<RecipeResult>();
       public IList<RecipeAgent> recipeAgentList = new List<RecipeAgent>();
@@ -155,6 +176,23 @@ namespace RePopCraftingStudio.Db
       public long Steps { get { return (long)Items[ 4 ]; } }
       public long IngredientWeight { get { return (long)Items[ 5 ]; } }
       public long AgentWeight { get { return (long)Items[ 6 ]; } }
+      public int CompareTo(Recipe a)
+      {
+          int ret = Name.CompareTo(a.Name);
+          if (ret != 0)
+          {
+              return ret;
+          }
+          if (Id < a.Id)
+          {
+              return -1;
+          }
+          if (Id > a.Id)
+          {
+              return 1;
+          }
+          return 0;
+      }
    }
 
    public class RecipeAgent : Entity
@@ -196,9 +234,9 @@ namespace RePopCraftingStudio.Db
       [EntityColumn( @"Recipe Id" )]
       public long RecipeId { get { return (long)Items[ 0 ]; } }
 
-      [EntityColumn( @"Recipe Name", 96 )]
+      //[EntityColumn( @"Recipe Name", 96 )]
       //public string RecipeName { get { return Db.GetRecipeName( this ); } }
-      public string RecipeName { get { return @"TODO: Fix RecipeName getter"; } }
+      //public string RecipeName { get { return @"TODO: Fix RecipeName getter"; } }
 
       [EntityColumn( @"Group Id" )]
       public long GroupId { get { return (long)Items[ 1 ]; } }
@@ -315,5 +353,17 @@ namespace RePopCraftingStudio.Db
 
        public long ItemId { get { return (long)Items[0]; } }
        public long ComponentId { get { return (long)Items[1]; } }
+   }
+
+   [DebuggerDisplay(@"{ItemCraftingFilterId}: {ItemId}")]
+   public class ItemCraftingFilter : Entity
+   {
+       public ItemCraftingFilter(RepopDb db, object[] items)
+           : base(db, items)
+       {
+       }
+
+       public long ItemId { get { return (long)Items[0]; } }
+       public long FilterId { get { return (long)Items[1]; } }
    }
 }

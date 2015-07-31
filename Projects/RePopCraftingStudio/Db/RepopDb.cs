@@ -16,10 +16,13 @@ namespace RePopCraftingStudio.Db
     public class RepopDb
     {
         Dictionary<long, Skill> skillDict = new Dictionary<long, Skill>();
+
         Dictionary<long, Recipe> recipeDict = new Dictionary<long, Recipe>();
         Dictionary<EntityTypes, Dictionary<long, IList<RecipeResult>>> recipeResultByResultIdTypeIdDict = new Dictionary<EntityTypes, Dictionary<long, IList<RecipeResult>>>();
-        Dictionary<long, IList<ItemCraftingComponent>> itemCraftingComponentDict = new Dictionary<long, IList<ItemCraftingComponent>>();
+
+        Dictionary<long, Item> itemDict = new Dictionary<long, Item>();
         Dictionary<long, IList<ItemCraftingComponent>> itemCraftingComponentReverseDict = new Dictionary<long, IList<ItemCraftingComponent>>();
+        Dictionary<long, IList<ItemCraftingFilter>> itemCraftingFilterReverseDict = new Dictionary<long, IList<ItemCraftingFilter>>();
 
         public string ConnectionString { get; set; }
 
@@ -41,13 +44,15 @@ namespace RePopCraftingStudio.Db
             Recipe recipe = recipeDict[recipeResult.RecipeId];
             foreach (RecipeAgent recipeAgent in recipe.recipeAgentList)
             {
-                IList<Item> items = new List<Item>();
+                List<Item> items = new List<Item>();
 
                 IEnumerable<ItemCraftingComponent> itemList = itemCraftingComponentReverseDict[recipeAgent.ComponentId];
                 foreach (ItemCraftingComponent itemCraftingComponent in itemList)
                 {
                     items.Add(GetItemById(itemCraftingComponent.ItemId));
                 }
+
+                items.Sort();
 
                 AgentSlotInfo slot = new AgentSlotInfo
                 {
@@ -83,7 +88,7 @@ namespace RePopCraftingStudio.Db
         // Ingredient Slot Info 
         public IEnumerable<IngredientSlotInfo> GetIngredientSlotsInfoForRecipeResult(RecipeResult recipeResult)
         {
-            IList<IngredientSlotInfo> slotInfos = new List<IngredientSlotInfo>();
+            List<IngredientSlotInfo> slotInfos = new List<IngredientSlotInfo>();
             for (int ingSlot = 1; ingSlot < 5; ingSlot++)
             {
                 IngredientSlotInfo slotInfo = GetIngredientSlotInfoForRecipeResultAndIngSlot(recipeResult, ingSlot);
@@ -91,12 +96,14 @@ namespace RePopCraftingStudio.Db
                     slotInfos.Add(slotInfo);
             }
 
+            slotInfos.Sort();
+
             return slotInfos;
         }
 
-        public IngredientSlotInfo GetIngredientSlotInfoForRecipeResultAndIngSlot(RecipeResult recipeResult, int ingSlot)
+        public IngredientSlotInfo GetIngredientSlotInfoForRecipeResultAndIngSlot2(RecipeResult recipeResult, int ingSlot)
         {
-            IList<Item> items = new List<Item>();
+            List<Item> items = new List<Item>();
             var rows = GetDataRows(@"select * from item_crafting_filters
 	         inner join item_crafting_components on (item_crafting_components.itemid = item_crafting_filters.itemid)
 	         where item_crafting_components.componentid in
@@ -123,34 +130,146 @@ namespace RePopCraftingStudio.Db
                 Component = SelectCraftingComponentById((long)rows[0][@"componentId"]),
             };
         }
+        public IngredientSlotInfo GetIngredientSlotInfoForRecipeResultAndIngSlot(RecipeResult recipeResult, int ingSlot)
+        {
+            List<Item> baseItems = new List<Item>();
+            long firstComponentId = 0;
+
+            IEnumerable<long> componentIds = GetComponentIdsForRecipeResultAndIngSlot(recipeResult, ingSlot);
+            foreach (long componentId in componentIds)
+            {
+                IEnumerable<Item> componentItems = GetItemsForComponent(componentId);
+                foreach (Item item in componentItems)
+                {
+                    if (baseItems.Contains(item) == false)
+                    {
+                        baseItems.Add(item);
+                        if (firstComponentId == 0)
+                        {
+                            firstComponentId = componentId;
+                        }
+                    }
+                }
+            }
+
+            long filterId = recipeResult.GetFilterId(ingSlot);
+
+            List<Item> filterItems = new List<Item>();
+            foreach (Item item in baseItems)
+            {
+                if (CheckItemAgainstFilter(item, filterId) == true)
+                {
+                    filterItems.Add(item);
+                }
+            }
+
+            List<Item> items = null;
+
+            if (filterItems.Count > 0)
+            {
+                items = filterItems;
+            }
+            else if (baseItems.Count > 0)
+            {
+                items = baseItems;
+            } else 
+            {
+                return null;
+            }
+
+            items.Sort();
+
+            return new IngredientSlotInfo
+            {
+                IngSlot = ingSlot,
+                Items = items,
+                Component = SelectCraftingComponentById(firstComponentId),
+            };
+        }
+
+        public IEnumerable<long> GetComponentIdsForRecipeResultAndIngSlot(RecipeResult recipeResult, int ingSlot)
+        {
+            List<long> componentIds = new List<long>();
+            
+            Recipe recipe = recipeDict[recipeResult.RecipeId];
+            foreach (RecipeIngredient recipeIngredient in recipe.recipeIngredientList)
+            {
+                if (recipeIngredient.IngSlot == ingSlot)
+                {
+                    if (componentIds.Contains(recipeIngredient.ComponentId) == false)
+                    {
+                        componentIds.Add(recipeIngredient.ComponentId);
+                    }
+                }
+            }
+            return componentIds;
+        }
+
+        public bool CheckItemAgainstFilter(Item item, long filterId)
+        {
+            foreach (ItemCraftingFilter itemCraftingFilter in item.itemCraftingFilterList)
+            {
+                if (itemCraftingFilter.FilterId == filterId)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        public IEnumerable<Item> GetItemsForComponent(long componentId)
+        {
+            List<Item> items = new List<Item>();
+
+            IEnumerable<ItemCraftingComponent> itemCraftingComponents = itemCraftingComponentReverseDict[componentId];
+
+            foreach (ItemCraftingComponent itemCraftingComponent in itemCraftingComponents)
+            {
+                Item item = itemDict[itemCraftingComponent.ItemId];
+                if (items.Contains(item) == false)
+                {
+                    items.Add(item);
+                }
+            }
+
+            return items;
+        }
 
         // "Items" table access
         public string GetItemName(long itemId)
         {
             if (0 == itemId)
                 return string.Empty;
-            try
-            {
-                return (string)GetDataRow(@"select displayName from items where itemId = {0}", itemId).ItemArray[0];
-            }
-            catch (Exception ex)
+            Item item = GetItemById(itemId);
+            if (item == null)
             {
                 return string.Empty;
             }
+            return item.Name;
         }
 
         public Item GetItemById(long itemId)
         {
             if (0 == itemId)
                 return null;
-            return new Item(this, GetDataRow(@"select * from items where itemId = {0}", itemId).ItemArray);
+
+            Item item = null;
+            itemDict.TryGetValue(itemId, out item);
+            return item;
         }
 
         public IEnumerable<Item> SelectItemsByName(string filter)
         {
-            return RowsToEntities(
-               GetDataRows(@"select * from items where displayName like '%{0}%'", filter),
-               r => new Item(this, r.ItemArray));
+            IList<Item> list = new List<Item>();
+            foreach (Item item in itemDict.Values)
+            {
+                if (stringLike(item.Name, filter) == true)
+                {
+                    list.Add(item);
+                }
+            }
+            return list;
         }
 
         public IEnumerable<Entity> SelectItemEntitiesByName(string filter)
@@ -197,7 +316,7 @@ namespace RePopCraftingStudio.Db
             Recipe recipe = recipeDict[recipeId];
             if (resultId != 0)
             {
-                IList<RecipeResult> results = new List<RecipeResult>();
+                List<RecipeResult> results = new List<RecipeResult>();
                 foreach (RecipeResult result in recipe.recipeResultList)
                 {
                     if (result.ResultId == resultId)
@@ -205,6 +324,9 @@ namespace RePopCraftingStudio.Db
                         results.Add(result);
                     }
                 }
+
+                results.Sort();
+
                 return results;
             }
             return recipe.recipeResultList;
@@ -249,6 +371,10 @@ namespace RePopCraftingStudio.Db
         public IEnumerable<Entity> SelectRecipeEntitiesByName(string filter)
         {
             return SelectRecipesByName(filter).OfType<Entity>();
+        }
+        public Recipe GetRecipeById(long recipeId)
+        {
+            return recipeDict[recipeId];
         }
 
         private IEnumerable<T> RowsToEntities<T>(DataRowCollection rows, Func<DataRow, T> make) where T : Entity
@@ -316,7 +442,9 @@ namespace RePopCraftingStudio.Db
             bootstrapRecipeAgents();
             bootstrapRecipeIngredient();
             bootstrapRecipeSkillRange();
+            bootstrapItems();
             bootstrapItemCraftingComponent();
+            bootstrapItemCraftingFilter();
         }
 
         private void bootstrapSkills()
@@ -414,6 +542,17 @@ namespace RePopCraftingStudio.Db
             }
         }
 
+        private void bootstrapItems()
+        {
+            IEnumerable<Item> itemList = RowsToEntities(
+                   GetDataRows(@"select * from items"),
+                   r => new Item(this, r.ItemArray));
+            foreach (Item item in itemList)
+            {
+                itemDict.Add(item.Id, item);
+            }
+        }
+
         private void bootstrapItemCraftingComponent()
         {
             IEnumerable<ItemCraftingComponent> itemCraftingComponentList = RowsToEntities(
@@ -421,13 +560,8 @@ namespace RePopCraftingStudio.Db
                    r => new ItemCraftingComponent(this, r.ItemArray));
             foreach (ItemCraftingComponent itemCraftingComponent in itemCraftingComponentList)
             {
-                IList<ItemCraftingComponent> componentIdList = null;
-                if (itemCraftingComponentDict.TryGetValue(itemCraftingComponent.ItemId, out componentIdList) == false)
-                {
-                    componentIdList = new List<ItemCraftingComponent>();
-                    itemCraftingComponentDict[itemCraftingComponent.ItemId] = componentIdList;
-                }
-                componentIdList.Add(itemCraftingComponent);
+                Item item = itemDict[itemCraftingComponent.ItemId];
+                item.itemCraftingComponentList.Add(itemCraftingComponent);
 
                 IList<ItemCraftingComponent> itemIdList = null;
                 if (itemCraftingComponentReverseDict.TryGetValue(itemCraftingComponent.ComponentId, out itemIdList) == false)
@@ -436,6 +570,26 @@ namespace RePopCraftingStudio.Db
                     itemCraftingComponentReverseDict[itemCraftingComponent.ComponentId] = itemIdList;
                 }
                 itemIdList.Add(itemCraftingComponent);
+                //recipeResultDict[recipeResult.Type][recipeResult.ResultId][recipeResult.GroupId].Add(recipeResult);
+            }
+        }
+        private void bootstrapItemCraftingFilter()
+        {
+            IEnumerable<ItemCraftingFilter> itemCraftingFilterList = RowsToEntities(
+                   GetDataRows(@"select * from item_crafting_filters"),
+                   r => new ItemCraftingFilter(this, r.ItemArray));
+            foreach (ItemCraftingFilter itemCraftingFilter in itemCraftingFilterList)
+            {
+                Item item = itemDict[itemCraftingFilter.ItemId];
+                item.itemCraftingFilterList.Add(itemCraftingFilter);
+
+                IList<ItemCraftingFilter> itemIdList = null;
+                if (itemCraftingFilterReverseDict.TryGetValue(itemCraftingFilter.FilterId, out itemIdList) == false)
+                {
+                    itemIdList = new List<ItemCraftingFilter>();
+                    itemCraftingFilterReverseDict[itemCraftingFilter.FilterId] = itemIdList;
+                }
+                itemIdList.Add(itemCraftingFilter);
                 //recipeResultDict[recipeResult.Type][recipeResult.ResultId][recipeResult.GroupId].Add(recipeResult);
             }
         }

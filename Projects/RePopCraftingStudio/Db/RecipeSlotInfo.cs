@@ -1,5 +1,7 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Diagnostics;
 
 namespace RePopCraftingStudio.Db
 {
@@ -7,7 +9,7 @@ namespace RePopCraftingStudio.Db
    {
       private Item _specificItem;
 
-      public IEnumerable<Item> Items { get; set; }
+      public List<Item> Items { get; set; }
       public CraftingComponent Component { get; set; }
 
       public Item SpecificItem
@@ -27,9 +29,38 @@ namespace RePopCraftingStudio.Db
    {
    }
 
-   public class IngredientSlotInfo : RecipeSlotInfo
+   public class IngredientSlotInfo : RecipeSlotInfo, IComparable<IngredientSlotInfo>
    {
       public int IngSlot { get; set; }
+      public int CompareTo(IngredientSlotInfo a)
+      {
+          if (this == a)
+          {
+              return 0;
+          }
+
+          if (!IsSpecific && a.IsSpecific)
+          {
+              return 1;
+          }
+
+
+          if (IsSpecific && a.IsSpecific)
+          {
+              int ret = Items.First().Name.CompareTo(a.Items.First().Name);
+              if (ret != 0)
+              {
+                  return ret;
+              }
+          }
+
+          if (IsSpecific && !a.IsSpecific)
+          {
+              return -1;
+          }
+
+          return 0;
+      }
    }
 
    public static class IngredientSlotInfoExtensions
